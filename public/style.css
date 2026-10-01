@@ -1,13 +1,50 @@
 :root {
   color-scheme: dark;
-  --bg: #0c1015;
-  --panel: #141b23;
-  --line: #29333f;
-  --muted: #9aa9bb;
-  --text: #edf2f7;
-  --gold: #f2c75c;
-  --green: #83d9af;
-  --red: #f59592;
+  /* Surfaces */
+  --bg: #08070c;
+  --bg-2: #0e0c13;
+  --panel: #14121b;
+  --panel-2: #1b1723;
+  --btn: #1d1826;
+  --line: #292431;
+  --line-2: #3c324b;
+  --track: #2a2432;
+  /* Text */
+  --text: #f6f3fa;
+  --text-2: #c3c2b7;
+  --muted: #a29aaa;
+  /* Identity: one accent and glow per bot */
+  --accent: #eebd45;
+  --gold: #eebd45;
+  --bee-breakout: #efc869;
+  --bee-trend: #a891f5;
+  --bee-momentum: #eb6698;
+  --bee-control: #5fd3c4;
+  --bee-breakout-glow: rgba(239, 200, 105, 0.38);
+  --bee-trend-glow: rgba(168, 145, 245, 0.38);
+  --bee-momentum-glow: rgba(235, 102, 152, 0.38);
+  --bee-control-glow: rgba(95, 211, 196, 0.38);
+  /* Status */
+  --green: #74db9d;
+  --red: #ef7291;
+  --good: #74db9d;
+  --bad: #ef7291;
+  --warn: #fab219;
+  --alert-bg: #352827;
+  --alert-line: #8a5350;
+  --alert-text: #ffd1bf;
+  --gain-text: #91edb0;
+  --gain-bg: #153323;
+  --gain-line: #2b6841;
+  --loss-text: #ff9eae;
+  --loss-bg: #391c28;
+  --loss-line: #713447;
+  --pnl-neutral-bg: #26212e;
+  /* Effects */
+  --glow-1: rgba(144, 133, 233, 0.1);
+  --glow-2: rgba(213, 81, 129, 0.08);
+  --overlay: rgba(4, 3, 8, 0.72);
+  --shadow: rgba(0, 0, 0, 0.55);
 }
 * {
   box-sizing: border-box;
@@ -15,7 +52,8 @@
 body {
   margin: 0;
   background:
-    radial-gradient(ellipse at top right, #202923 0, transparent 48%), var(--bg);
+    radial-gradient(ellipse at top right, transparent 0, transparent 48%),
+    var(--bg);
   color: var(--text);
   font:
     14px/1.5 system-ui,
@@ -57,8 +95,8 @@ header {
 }
 button,
 select {
-  background: #202a35;
-  border: 1px solid #435264;
+  background: var(--btn);
+  border: 1px solid var(--line-2);
   border-radius: 7px;
   color: var(--text);
   padding: 9px 13px;
@@ -137,7 +175,7 @@ h1 {
 }
 .avatar {
   font-size: 32px;
-  background: #202a35;
+  background: var(--btn);
   border-radius: 12px;
   padding: 8px 13px;
 }
@@ -191,7 +229,7 @@ h1 {
 }
 .position {
   padding: 10px;
-  background: #10161d;
+  background: var(--panel-2);
   border-radius: 7px;
   font-size: 12px;
   min-height: 55px;
@@ -261,7 +299,7 @@ th:first-child {
 }
 .bar {
   height: 5px;
-  background: #283441;
+  background: var(--track);
   border-radius: 4px;
   margin: 9px 0;
   overflow: hidden;
@@ -331,9 +369,9 @@ footer {
   width: 100%;
 }
 #alert {
-  background: #352827;
-  border: 1px solid #8a5350;
-  color: #ffd1bf;
+  background: var(--alert-bg);
+  border: 1px solid var(--alert-line);
+  color: var(--alert-text);
   padding: 12px 18px;
   border-radius: 9px;
   margin-bottom: 20px;
@@ -406,16 +444,7 @@ footer {
   }
 }
 /* Compact hive arena, inspired by the upstream BeeBots dashboard. */
-:root {
-  --bg: #09080d;
-  --panel: #14121b;
-  --line: #292431;
-  --muted: #a29aaa;
-  --text: #f6f3fa;
-  --gold: #eebd45;
-  --green: #74db9d;
-  --red: #ef7291;
-}
+
 body {
   background: var(--bg);
   font-size: 12px;
@@ -423,7 +452,7 @@ body {
 header {
   height: 64px;
   padding: 0 22px;
-  background: #0e0c13;
+  background: var(--bg-2);
   gap: 12px;
 }
 .brand {
@@ -448,8 +477,8 @@ header {
 }
 button,
 select {
-  background: #1d1826;
-  border-color: #3c324b;
+  background: var(--btn);
+  border-color: var(--line-2);
   padding: 6px 9px;
   font-size: 10px;
 }
@@ -510,8 +539,8 @@ main {
   border-top: 2px solid var(--accent);
   background: linear-gradient(
     165deg,
-    color-mix(in srgb, var(--accent) 9%, #14121b),
-    #14121b 28%
+    color-mix(in srgb, var(--accent) 9%, var(--panel)),
+    var(--panel) 28%
   );
   display: flex;
   flex-direction: column;
@@ -570,7 +599,7 @@ main {
   font-size: 11px;
 }
 .position {
-  background: #1b1723;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   font-size: 11px;
   min-height: 59px;
@@ -671,7 +700,7 @@ td {
 }
 .bar {
   height: 4px;
-  background: #302639;
+  background: var(--track);
 }
 .events {
   height: 255px;
@@ -984,10 +1013,10 @@ header {
   color: var(--text);
   padding: 0;
   width: min(430px, calc(100vw - 32px));
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 18px 50px var(--shadow);
 }
 .model-dialog::backdrop {
-  background: rgba(4, 7, 11, 0.72);
+  background: var(--overlay);
 }
 .dialog-head {
   display: flex;
@@ -1029,7 +1058,7 @@ header {
   box-sizing: border-box;
 }
 .settings-body input {
-  background: #0c1015;
+  background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--text);
@@ -1125,18 +1154,78 @@ footer {
     font-size: 36px;
   }
 }
-.sidebar .grid{grid-template-columns:minmax(0,1fr)}
-.sidebar{grid-template-rows:minmax(0,1.15fr) minmax(0,1fr)}
-@media(max-width:1100px) and (min-width:701px){.sidebar{grid-template-rows:320px}}
-@media(max-width:700px){.sidebar{grid-template-rows:390px 260px}}
-@media(min-width:1101px){.sidebar{height:calc(100vh - 200px);min-height:600px;max-height:800px}.sidebar .grid{grid-template-rows:auto minmax(0,1fr)}.sidebar .lower{grid-template-rows:minmax(0,1fr)}}
-.metrics {grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
-.order-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
-.pnl-badge{display:inline-block;white-space:nowrap;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
-.pnl-badge.gain{color:#91edb0;background:#153323;border:1px solid #2b6841}
-.pnl-badge.loss{color:#ff9eae;background:#391c28;border:1px solid #713447}
-.pnl-badge.neutral{color:var(--muted);background:#26212e;border:1px solid var(--line)}
-@media(max-width:700px){.order-heading{flex-wrap:wrap}.metrics{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.sidebar .grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.sidebar {
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+}
+@media (max-width: 1100px) and (min-width: 701px) {
+  .sidebar {
+    grid-template-rows: 320px;
+  }
+}
+@media (max-width: 700px) {
+  .sidebar {
+    grid-template-rows: 390px 260px;
+  }
+}
+@media (min-width: 1101px) {
+  .sidebar {
+    height: calc(100vh - 200px);
+    min-height: 600px;
+    max-height: 800px;
+  }
+  .sidebar .grid {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .sidebar .lower {
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+.metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.order-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.pnl-badge {
+  display: inline-block;
+  white-space: nowrap;
+  border-radius: 7px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.pnl-badge.gain {
+  color: var(--gain-text);
+  background: var(--gain-bg);
+  border: 1px solid var(--gain-line);
+}
+.pnl-badge.loss {
+  color: var(--loss-text);
+  background: var(--loss-bg);
+  border: 1px solid var(--loss-line);
+}
+.pnl-badge.neutral {
+  color: var(--muted);
+  background: var(--pnl-neutral-bg);
+  border: 1px solid var(--line);
+}
+@media (max-width: 700px) {
+  .order-heading {
+    flex-wrap: wrap;
+  }
+  .metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 
 /* 2.4.0/2.5.0 layout: four bot cards across the page; then a three-up row of
    Order ledger / Decision stream / Laya analysis under the bots; then a
@@ -1236,5 +1325,297 @@ footer {
   .panels,
   .operations {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   2.10.0 - look and feel: layered background, identity glow, light/dark theme
+   and movement. Colours, type and motion only; the layout above is unchanged.
+   The file is tokens-then-rules: change a value in one of the two :root blocks
+   to restyle the whole page in either theme.
+   ========================================================================== */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f4f9;
+  --bg-2: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f1eff6;
+  --btn: #ffffff;
+  --line: #e4e1ec;
+  --line-2: #cdc7db;
+  --track: #e9e6f1;
+  --text: #17141f;
+  --text-2: #4a4658;
+  --muted: #6c6878;
+  --accent: #a9740a;
+  --gold: #a9740a;
+  --bee-breakout: #a86a05;
+  --bee-trend: #5b49c9;
+  --bee-momentum: #bf3767;
+  --bee-control: #0d8a7d;
+  --bee-breakout-glow: rgba(168, 106, 5, 0.22);
+  --bee-trend-glow: rgba(91, 73, 201, 0.22);
+  --bee-momentum-glow: rgba(191, 55, 103, 0.22);
+  --bee-control-glow: rgba(13, 138, 125, 0.22);
+  --green: #12803f;
+  --red: #c02a4c;
+  --good: #12803f;
+  --bad: #c02a4c;
+  --warn: #a86300;
+  --alert-bg: #fdecea;
+  --alert-line: #e3a9a6;
+  --alert-text: #7c2a27;
+  --gain-text: #0c6b39;
+  --gain-bg: #ddf3e6;
+  --gain-line: #9ed7b5;
+  --loss-text: #a42245;
+  --loss-bg: #fbe3ea;
+  --loss-line: #e9a9bb;
+  --pnl-neutral-bg: #eeecf4;
+  --glow-1: rgba(110, 90, 220, 0.12);
+  --glow-2: rgba(200, 60, 120, 0.1);
+  --overlay: rgba(25, 18, 40, 0.45);
+  --shadow: rgba(40, 30, 60, 0.22);
+}
+
+/* Type and the page glow. The gradient is fixed so it never scrolls with content. */
+body {
+  background:
+    radial-gradient(66rem 34rem at 12% -10%, var(--glow-1), transparent 68%),
+    radial-gradient(54rem 32rem at 90% 112%, var(--glow-2), transparent 70%),
+    var(--bg);
+  background-attachment: fixed;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease;
+}
+code {
+  font-family:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+/* Header: glassy, with the brand mark lit. */
+header {
+  background: color-mix(in srgb, var(--bg-2) 86%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.hive {
+  filter: drop-shadow(
+    0 0 0.6rem color-mix(in srgb, var(--gold) 55%, transparent)
+  );
+  animation: hive-bob 4s ease-in-out infinite;
+}
+
+/* Bot cards: identity edge, tinted head, glow on hover. */
+.bot {
+  border-top-width: 3px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 11%, var(--panel)) 0%,
+    var(--panel) 26%
+  );
+  transition:
+    box-shadow 0.35s ease,
+    transform 0.2s ease;
+}
+.bot:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 1.2rem 2.6rem -1.1rem var(--accent-glow);
+}
+.avatar {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 1.5rem color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.bot-value strong {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-shadow: 0 0 1.6rem color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.pill {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--text-2);
+}
+.decision {
+  color: var(--text-2);
+}
+.decision b {
+  text-shadow: 0 0 0.8rem color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Panels and counters lift on hover. */
+.panel,
+.summary-strip > div {
+  transition:
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+.panel:hover,
+.summary-strip > div:hover {
+  border-color: color-mix(in srgb, var(--gold) 45%, var(--line));
+  box-shadow: 0 0 1.1rem -0.4rem
+    color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.summary-strip strong {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* Controls. */
+button,
+select {
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    background-color 0.2s,
+    color 0.2s;
+}
+button:hover:not(:disabled),
+select:hover {
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--line-2));
+  box-shadow: 0 0 0.9rem -0.15rem
+    color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.gear {
+  transition:
+    transform 0.35s ease,
+    box-shadow 0.2s,
+    border-color 0.2s;
+}
+.gear:hover {
+  transform: rotate(35deg);
+}
+#theme-toggle {
+  font-size: 13px;
+  line-height: 1;
+  padding: 5px 9px;
+}
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* Status: live pulses; the connection light glows. */
+#mode {
+  border-radius: 999px;
+  transition:
+    color 0.3s,
+    border-color 0.3s;
+}
+#mode[data-mode="live"] {
+  color: var(--red);
+  border-color: var(--red);
+  animation: pulse-border 2s infinite;
+}
+#mode[data-mode="demo"] {
+  color: var(--bee-trend);
+  border-color: var(--bee-trend);
+}
+#mode[data-mode="observe"] {
+  color: var(--gold);
+  border-color: var(--gold);
+}
+#connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+#connection::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0.55rem var(--green);
+  animation: blink 2s infinite;
+}
+#connection[data-state="off"] {
+  color: var(--red);
+}
+#connection[data-state="off"]::before {
+  background: var(--red);
+  box-shadow: 0 0 0.55rem var(--red);
+  animation: blink 0.9s infinite;
+}
+
+/* A little glow on the bars and equity traces. */
+.bar span {
+  box-shadow: 0 0 0.6rem color-mix(in srgb, var(--gold) 55%, transparent);
+}
+
+/* Movement. Only genuinely new rows animate; see app.js. */
+.event.is-new {
+  animation: tick-in 0.4s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.bot.flash-up {
+  animation: flash-up 1.5s ease-out;
+}
+.bot.flash-down {
+  animation: flash-down 1.5s ease-out;
+}
+
+@keyframes hive-bob {
+  50% {
+    transform: translateY(-2px);
+  }
+}
+@keyframes tick-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.6rem);
+  }
+}
+@keyframes blink {
+  50% {
+    opacity: 0.4;
+  }
+}
+@keyframes pulse-border {
+  50% {
+    box-shadow: 0 0 0.8rem color-mix(in srgb, var(--red) 65%, transparent);
+  }
+}
+@keyframes flash-up {
+  0% {
+    box-shadow:
+      inset 0 0 0 1px var(--green),
+      0 0 1.6rem -0.3rem color-mix(in srgb, var(--green) 65%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+@keyframes flash-down {
+  0% {
+    box-shadow:
+      inset 0 0 0 1px var(--red),
+      0 0 1.6rem -0.3rem color-mix(in srgb, var(--red) 65%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+/* Honour a reduced-motion preference in full. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

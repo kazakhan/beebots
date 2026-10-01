@@ -20,12 +20,8 @@ const money = (v) =>
       });
 const pct = (v) =>
   v === null ? "—" : `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
-const colors = {
-    breakout: "#efc869",
-    trend: "#a891f5",
-    momentum: "#eb6698",
-    control: "#5fd3c4",
-  },
+// Bot identity colours are CSS tokens so they follow the light/dark theme.
+const BEE_IDS = ["breakout", "trend", "momentum", "control"],
   icons = { breakout: "🐝", trend: "🌿", momentum: "⚡", control: "🎲" };
 const portraits = {
   breakout:
@@ -46,7 +42,7 @@ const subtitles = {
 portraits.control =
   "data:image/svg+xml;utf8," +
   encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#0c1015"/><rect x="9" y="9" width="46" height="46" rx="9" fill="none" stroke="#5fd3c4" stroke-width="3"/><circle cx="22" cy="22" r="4.5" fill="#5fd3c4"/><circle cx="42" cy="42" r="4.5" fill="#5fd3c4"/><circle cx="32" cy="32" r="4.5" fill="#5fd3c4"/><circle cx="42" cy="22" r="4.5" fill="#5fd3c4"/><circle cx="22" cy="42" r="4.5" fill="#5fd3c4"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="none"/><rect x="9" y="9" width="46" height="46" rx="9" fill="none" stroke="#5fd3c4" stroke-width="3"/><circle cx="22" cy="22" r="4.5" fill="#5fd3c4"/><circle cx="42" cy="42" r="4.5" fill="#5fd3c4"/><circle cx="32" cy="32" r="4.5" fill="#5fd3c4"/><circle cx="42" cy="22" r="4.5" fill="#5fd3c4"/><circle cx="22" cy="42" r="4.5" fill="#5fd3c4"/></svg>',
   );
 const tokenText = (n) =>
   n >= 1e6
@@ -86,12 +82,30 @@ function costTitle(s) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "2.9.0";
+const EXPECTED_BUILD = "2.10.0";
 let state = null,
   events = [],
   analyses = new Map(),
   fetching = false,
   catalogue = null;
+// theme.js sets data-theme before first paint (so there is no flash); the gear
+// next to the toggle just flips it and remembers the choice.
+const THEME_KEY = "beebots-theme";
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const btn = $("#theme-toggle");
+  if (!btn) return;
+  const light = theme === "light";
+  btn.textContent = light ? "☾" : "☀";
+  const label = light ? "Switch to dark theme" : "Switch to light theme";
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+}
+// Transient state for the movement effects: which bot equity last flashed, and
+// which stream rows have already animated, so a 5s refresh does not replay them.
+const prevEquity = new Map(),
+  seenEventIds = new Set();
+let eventsReady = false;
 // A bot holds up to maxPositions concurrent positions. Older snapshots carry a
 // single `position`; both shapes are tolerated so a frontend refresh never breaks
 // against a backend mid-deploy.
@@ -236,6 +250,8 @@ function render(s) {
     s.halt || (s.paused ? "New entries paused" : "Agents active");
   $("#pause").disabled = s.mode !== "live" || !!s.halt;
   $("#pause").textContent = s.paused ? "Resume entries" : "Pause entries";
+  $("#mode").dataset.mode =
+    s.mode === "live" ? "live" : s.mode === "demo" ? "demo" : "observe";
   // The summary strip is real money only: a paper arm's simulated capital must
   // not inflate combined equity or realised P/L. Its own card and the
   // leaderboard still show it.
@@ -268,10 +284,19 @@ function render(s) {
   const warning = s.halt || s.health.error;
   $("#alert").hidden = !warning;
   $("#alert").textContent = warning || "";
+  // Flash a card once when its equity moves. The class is embedded only on the
+  // render that detects the change, so a routine refresh never replays it.
+  const flash = {};
+  for (const b of s.bots) {
+    const prev = prevEquity.get(b.id);
+    if (prev !== undefined && b.equity !== null && prev !== b.equity)
+      flash[b.id] = b.equity > prev ? "flash-up" : "flash-down";
+    if (b.equity !== null) prevEquity.set(b.id, b.equity);
+  }
   $("#bots").innerHTML = s.bots
     .map(
       (b) =>
-        `<article class="bot" style="--accent:${colors[b.id]}"><div class="bot-top"><img class="avatar" src="${portraits[b.id]}" alt="${esc(b.name)} bee portrait"><div><h2>${esc(b.name)}</h2><span class="style">${subtitles[b.id]}</span></div><span class="pill">${s.rules?.[b.id]?.paper ? "PAPER · " : ""}${positionsOf(b).length ? `${positionsOf(b).length} POSITION${positionsOf(b).length > 1 ? "S" : ""}` : "IN CASH"}</span></div><div class="bot-value"><strong>${money(b.equity)}</strong><span class="${b.returnPct >= 0 ? "positive" : "negative"}">${pct(b.returnPct)}</span></div><div class="metrics"><div><small>CASH / USDC</small><b>${money(b.cash)}</b></div><div><small>REALISED P/L</small><b>${money(b.realised)}</b></div><div><small>FEES PAID</small><b>${money(b.fees)}</b></div><div title="Settled SELL orders after fees; breakeven sales excluded from W/L"><small>WIN / LOSS</small><b>${b.performance ? `${b.performance.wins}W / ${b.performance.losses}L` : "—"}</b>${b.performance?.breakeven ? `<small>${b.performance.breakeven} breakeven</small>` : ""}</div></div><div class="position">${renderPositions(b)}</div><div class="bot-chart" data-bot="${esc(b.id)}"></div><div class="call-label">${esc(vendor).toUpperCase()}’S LAST DECISION</div><p class="decision">${b.lastDecision ? `<b>${esc(b.lastDecision.action)}</b> · ${esc(b.lastDecision.reason)}` : "Waiting for first assessment"}</p></article>`,
+        `<article class="bot ${flash[b.id] ?? ""}" style="--accent:var(--bee-${b.id});--accent-glow:var(--bee-${b.id}-glow)"><div class="bot-top"><img class="avatar" src="${portraits[b.id]}" alt="${esc(b.name)} bee portrait"><div><h2>${esc(b.name)}</h2><span class="style">${subtitles[b.id]}</span></div><span class="pill">${s.rules?.[b.id]?.paper ? "PAPER · " : ""}${positionsOf(b).length ? `${positionsOf(b).length} POSITION${positionsOf(b).length > 1 ? "S" : ""}` : "IN CASH"}</span></div><div class="bot-value"><strong>${money(b.equity)}</strong><span class="${b.returnPct >= 0 ? "positive" : "negative"}">${pct(b.returnPct)}</span></div><div class="metrics"><div><small>CASH / USDC</small><b>${money(b.cash)}</b></div><div><small>REALISED P/L</small><b>${money(b.realised)}</b></div><div><small>FEES PAID</small><b>${money(b.fees)}</b></div><div title="Settled SELL orders after fees; breakeven sales excluded from W/L"><small>WIN / LOSS</small><b>${b.performance ? `${b.performance.wins}W / ${b.performance.losses}L` : "—"}</b>${b.performance?.breakeven ? `<small>${b.performance.breakeven} breakeven</small>` : ""}</div></div><div class="position">${renderPositions(b)}</div><div class="bot-chart" data-bot="${esc(b.id)}"></div><div class="call-label">${esc(vendor).toUpperCase()}’S LAST DECISION</div><p class="decision">${b.lastDecision ? `<b>${esc(b.lastDecision.action)}</b> · ${esc(b.lastDecision.reason)}` : "Waiting for first assessment"}</p></article>`,
     )
     .join("");
   document.querySelectorAll(".bot").forEach((card, index) => {
@@ -340,7 +365,7 @@ function render(s) {
           `${8 + ((x.ts - start) / duration) * 284},${190 - ((x.equity - lo) / Math.max(0.01, hi - lo)) * 170}`,
       )
       .join(" ");
-    el.innerHTML = `<svg viewBox="0 0 300 210" preserveAspectRatio="none" role="img" aria-label="${esc(el.dataset.bot)} equity in USDC"><path d="M8 20H292 M8 105H292 M8 190H292" stroke="var(--line)" fill="none"/><polygon points="8,205 ${points} 292,205" fill="var(--accent)" opacity=".08"/><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="chart-labels"><span>${new Date(start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span>${money(lo)}–${money(hi)} USDC</span><span>Now</span></div>`;
+    el.innerHTML = `<svg viewBox="0 0 300 210" preserveAspectRatio="none" role="img" aria-label="${esc(el.dataset.bot)} equity in USDC"><path d="M8 20H292 M8 105H292 M8 190H292" fill="none" style="stroke:var(--line)"/><polygon points="8,205 ${points} 292,205" opacity=".08" style="fill:var(--accent)"/><polyline points="${points}" fill="none" vector-effect="non-scaling-stroke" style="stroke:var(--accent);stroke-width:2"/></svg><div class="chart-labels"><span>${new Date(start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span>${money(lo)}–${money(hi)} USDC</span><span>Now</span></div>`;
   });
 }
 function drawChart(rows) {
@@ -353,10 +378,8 @@ function drawChart(rows) {
     t0 = rows[0].ts,
     t1 = rows.at(-1).ts;
   $("#chart").innerHTML =
-    `<svg viewBox="0 0 600 110" preserveAspectRatio="none" role="img" aria-label="Bot equity history">${Object.keys(
-      colors,
-    )
-      .map((id) => {
+    `<svg viewBox="0 0 600 110" preserveAspectRatio="none" role="img" aria-label="Bot equity history">${BEE_IDS.map(
+      (id) => {
         const points = rows
           .filter((x) => x.bot === id)
           .map(
@@ -364,9 +387,9 @@ function drawChart(rows) {
               `${(((x.ts - t0) / Math.max(1, t1 - t0)) * 590 + 5).toFixed(1)},${(100 - ((x.equity - lo) / Math.max(1, hi - lo)) * 90).toFixed(1)}`,
           )
           .join(" ");
-        return `<polyline fill="none" stroke="${colors[id]}" stroke-width="2" points="${points}"/>`;
-      })
-      .join("")}</svg>`;
+        return `<polyline fill="none" points="${points}" style="stroke:var(--bee-${id});stroke-width:2"/>`;
+      },
+    ).join("")}</svg>`;
 }
 // Control POST helper: the server requires the opt-in header on every write.
 const control = (body) => ({
@@ -575,11 +598,15 @@ function renderEvents() {
           e.kind === filter,
       )
       .slice(0, 100)
-      .map(
-        (e) =>
-          `<div class="event"><time>${new Date(e.ts).toLocaleTimeString()}</time><div><b>${esc(e.bot || "system")} · ${esc(e.kind)} ${esc(e.action || e.status || "")}</b><p>${esc(e.reason || e.message || (e.kind === "analysis" ? `${e.product}: ${e.answers?.regime?.choice}; fit ${Number(e.answers?.fit?.score).toFixed(2)} / 2; queue ${e.queue_depth ?? "—"}` : e.product || e.clientId || ""))}</p></div></div>`,
-      )
+      .map((e) => {
+        // Animate a row only if it arrived after the first paint, and only once:
+        // a 5s refresh must not replay the whole stream.
+        const isNew = eventsReady && !seenEventIds.has(e.id);
+        seenEventIds.add(e.id);
+        return `<div class="event${isNew ? " is-new" : ""}"><time>${new Date(e.ts).toLocaleTimeString()}</time><div><b>${esc(e.bot || "system")} · ${esc(e.kind)} ${esc(e.action || e.status || "")}</b><p>${esc(e.reason || e.message || (e.kind === "analysis" ? `${e.product}: ${e.answers?.regime?.choice}; fit ${Number(e.answers?.fit?.score).toFixed(2)} / 2; queue ${e.queue_depth ?? "—"}` : e.product || e.clientId || ""))}</p></div></div>`;
+      })
       .join("") || '<p class="muted">No events match this filter yet.</p>';
+  eventsReady = true;
 }
 function renderAnalyses() {
   if (!analyses.size) {
@@ -605,8 +632,10 @@ async function refresh() {
     const r = await fetch("api/state");
     if (!r.ok) throw Error();
     render(await r.json());
+    $("#connection").dataset.state = "on";
   } catch {
     $("#connection").textContent = "RECONNECTING";
+    $("#connection").dataset.state = "off";
   } finally {
     fetching = false;
   }
@@ -614,10 +643,12 @@ async function refresh() {
 const stream = new EventSource("api/events");
 stream.onopen = () => {
   $("#connection").textContent = "● CONNECTED";
+  $("#connection").dataset.state = "on";
   refresh();
 };
 stream.onerror = () => {
   $("#connection").textContent = "RECONNECTING";
+  $("#connection").dataset.state = "off";
 };
 stream.addEventListener("sync", refresh);
 stream.onmessage = (m) => {
@@ -726,6 +757,19 @@ $("#pause").onclick = async () => {
   if (!r.ok) alert("Control request rejected");
   await refresh();
 };
+// Theme toggle: theme.js has already applied the stored (or OS) theme before
+// first paint; this only flips it and remembers the choice.
+$("#theme-toggle").onclick = () => {
+  const next =
+    document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    // Private mode: the toggle still works for this session.
+  }
+  applyTheme(next);
+};
+applyTheme(document.documentElement.dataset.theme || "dark");
 // Gear opens the settings dialog. Providers and the active selection are loaded
 // lazily so opening it never blocks the live stream.
 $("#model-gear").onclick = async () => {

@@ -14,6 +14,48 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [2.10.0] - 2026-10-01 - Look and feel: beebots.tech styling and light/dark themes
+
+The layout is unchanged. The dashboard now wears the visual language of the
+upstream project - per-bee identity colour with glow, a layered background, and
+movement - and ships a **Light** and **Dark** theme.
+
+### Added
+
+- **Light/Dark theme.** A toggle beside the gear flips the theme; the choice is
+  remembered in `localStorage`, and a first visit follows the OS preference.
+  `public/theme.js` runs before first paint (external, so the strict CSP is
+  unchanged) to avoid a flash of the wrong theme.
+- **Identity and energy** (colour, type and motion only): a layered radial page
+  glow; a 3px accent top edge and a tinted head per bot card; a glowing portrait
+  ring; big, tight, tabular equity figures; hover lift and glow on cards, panels
+  and controls; a pulsing live badge and a glowing connection light.
+- **Movement:** new decision-stream rows slide in once, and a bot card flashes
+  green or red for a moment when its equity moves. Everything is disabled under
+  `prefers-reduced-motion`.
+
+### Changed
+
+- `public/style.css` is now tokens-first: one dark `:root` and one
+  `:root[data-theme="light"]` block hold every colour. The duplicate token block
+  was removed and every hard-coded colour replaced with a token. No layout
+  property changed.
+- Bot accents and the portfolio chart now use the `--bee-<id>` tokens (and their
+  glows) instead of hex literals, so they follow the theme. The control portrait
+  is transparent-backed so it renders on either theme.
+- `public/theme.js` is served by a new static route in `src/server.mjs`.
+
+### Verification
+
+- 196 Node tests pass (`npm test`); no server behaviour changed beyond the
+  static route. `npm run demo` serves the theme toggle, `theme.js` and the light
+  tokens correctly.
+- Playwright is not installed, so the visual result is verified in a browser:
+  `npm run demo`, then open the printed URL and try the toggle at desktop,
+  tablet and phone widths.
+
+---
+
 ## [2.9.0] - 2026-10-01 - Decision-engine selection: Jev, Laya, LLM and hybrids
 
 The original [beebots](https://github.com/imikerussell/beebots) runs every

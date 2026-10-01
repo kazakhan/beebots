@@ -324,6 +324,7 @@ export function createServer({
         [config.basePath, "index.html"],
         [config.basePath + "app.js", "app.js"],
         [config.basePath + "style.css", "style.css"],
+        [config.basePath + "theme.js", "theme.js"],
       ]);
       if (req.method !== "GET" || !names.has(path))
         return json(404, { error: "Not found" });
