@@ -24,7 +24,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.0.1";
+const BUILD = "3.0.2";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -950,6 +950,11 @@ export class Engine {
       state = this.store.read(),
       bot = state.bots[id];
     const paper = this.isPaper(id);
+    // A paper arm has no exchange, so exchange lot/precision flooring does not
+    // apply: its simulated sizes are whatever the sizing code produced. Only a
+    // real order is rounded down to the product's increment.
+    const step = (value, increment) =>
+      paper ? str(dec(value)) : floorStep(value, increment);
     if (this.store.pending().some((o) => o.bot === id)) return;
     if (side === "BUY" && (state.paused || state.halt)) return;
     const p = await this.exchange.product(product);
@@ -993,10 +998,7 @@ export class Engine {
       );
       // Fee reserve includes a 0.1% buffer; no confidence-based sizing.
       const divisor = dec(add("1.001", feeRate));
-      size = floorStep(
-        str((dec(budget) * dec("1")) / divisor),
-        p.quote_increment,
-      );
+      size = step(str((dec(budget) * dec("1")) / divisor), p.quote_increment);
       if (evidence.strategyVersion || evidence.control) {
         policy = executionPlan(
           evidence,
@@ -1005,7 +1007,7 @@ export class Engine {
           Number(feeRate),
           rules,
         );
-        size = floorStep(policy.quote.toFixed(18), p.quote_increment);
+        size = step(policy.quote.toFixed(18), p.quote_increment);
         // The control has no strategy exit plan: its stops are the pct stops in
         // config, so the sizing plan is used but the policy is not attached.
         if (!evidence.strategyVersion) policy = null;
@@ -1031,7 +1033,9 @@ export class Engine {
         ? bot.positions.find((x) => x.product === product)
         : null;
       if (!held) throw Error("Position changed while decision was pending");
-      size = floorStep(held.quantity, p.base_increment);
+      // A paper fill is simulated locally, so the exchange lot size does not
+      // apply either: sell the full held quantity, even a sub-lot remainder.
+      size = step(held.quantity, p.base_increment);
       // Only a real order is bound by the exchange minimum. A paper arm can
       // always close its own simulated dust, so it cannot strand a position.
       if (
@@ -1067,7 +1071,7 @@ export class Engine {
         Number(takerFee),
         rules,
       );
-      const bounded = floorStep(checked.quote.toFixed(18), p.quote_increment);
+      const bounded = step(checked.quote.toFixed(18), p.quote_increment);
       if (dec(bounded) < dec(size)) size = bounded;
       reserve = add(size, mul(size, add(takerFee, "0.001")));
       if (

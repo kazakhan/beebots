@@ -290,13 +290,13 @@ test("a configured bot absent from the ledger cannot be dereferenced defensively
 // A paper position that is dust can never be closed through the exchange, but a
 // simulated arm has no exchange to satisfy. Before 3.0.1 the minimum check was
 // applied to paper too, so the control stranded its own dust.
-function dustFixture(paper) {
+function dustFixture(paper, quantity = "0.005") {
   const f = fixture({ paper, maxPositions: 1 });
   // A position worth less than the product's 1 USDC quote minimum.
   f.s.change((st) => {
     st.bots.control.cash = "99.5";
     st.bots.control.positions = [
-      { product: "A-USDC", quantity: "0.005", cost: "0.5", opened: Date.now() },
+      { product: "A-USDC", quantity, cost: "0.5", opened: Date.now() },
     ];
   });
   // The model asks to close it.
@@ -341,4 +341,52 @@ test("a real arm refuses a below-minimum holding for owner review", async () => 
     "the real arm keeps dust for owner review",
   );
   f.s.close();
+});
+
+test("a paper arm closes a holding smaller than one lot", async () => {
+  // Quantity below the product's 0.000001 base increment: flooring it to the
+  // lot size yields 0, which store.reserve rejects as "unowned quantity".
+  const f = dustFixture(true, "0.0000005");
+  await f.tick();
+  assert.equal(
+    f.s.read().bots.control.positions.length,
+    0,
+    "the sub-lot dust was closed",
+  );
+  f.s.close();
+});
+
+test("a paper arm opens below the exchange increment; a real arm does not", async () => {
+  // A coarse quote increment makes a small order floor to zero.
+  const coarse = (f) => {
+    f.engine.exchange.product = async (id) => ({
+      product_id: id,
+      product_type: "SPOT",
+      quote_currency_id: "USDC",
+      status: "online",
+      base_increment: "0.000001",
+      quote_increment: "1000",
+      base_min_size: "0.000001",
+      quote_min_size: "1",
+    });
+  };
+  const fp = fixture({ paper: true });
+  coarse(fp);
+  await fp.tick();
+  assert.equal(
+    fp.s.read().bots.control.positions.length,
+    1,
+    "the paper arm opened a sub-increment size",
+  );
+  fp.s.close();
+
+  const fr = fixture({ paper: false });
+  coarse(fr);
+  await fr.tick();
+  assert.equal(
+    fr.s.read().bots.control.positions.length,
+    0,
+    "the real arm refused the sub-increment size",
+  );
+  fr.s.close();
 });

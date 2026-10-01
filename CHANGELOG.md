@@ -14,6 +14,28 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.0.2] - 2026-10-01 - Paper arms ignore exchange increments too
+
+Follow-up to 3.0.1. Exempting paper arms from the exchange _minimum_ was not
+enough: the order size was still floored to the product's lot/precision
+increment, so a paper position smaller than one lot floored to `0` and
+`store.reserve` rejected the close with **"Cannot sell unowned quantity"**.
+
+### Fixed
+
+- **A paper arm is no longer rounded down to exchange increments** (BUY and
+  SELL). Its simulated sizes are exactly what the sizing code produced, so a
+  sub-lot holding is sold in full instead of becoming an unsellable `0`. Real
+  orders keep the increment flooring. (`engine.mjs`, the `step` helper.)
+
+### Verification
+
+- 208 Node tests pass (`npm test`), up from 206: a paper arm closes a holding
+  smaller than one lot, and opens a below-increment size where a real arm
+  refuses.
+
+---
+
 ## [3.0.1] - 2026-10-01 - Paper arms close their own dust; discovery excludes untradeable pairs
 
 Fixes the stuck control arm and the blank Dice balance seen live.
