@@ -42,3 +42,17 @@ test("resetting a clean control arm is a no-op", () => {
     s.close();
   }
 });
+
+test("resetting clears a sticky halt", () => {
+  const { s } = fixture();
+  try {
+    s.change((st) => {
+      st.halt = "Exchange buy value exceeded requested quote size";
+    });
+    const r = resetControl(s);
+    assert.equal(r.haltCleared, true);
+    assert.equal(s.read().halt, null, "the halt is cleared");
+  } finally {
+    s.close();
+  }
+});

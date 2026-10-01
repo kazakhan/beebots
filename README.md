@@ -47,7 +47,8 @@ the login is remembered for the browser tab. Set the credentials with
 install trades a simulated ledger on live prices. Real orders additionally
 require `mode: "live"` and the explicit acknowledgement; a paper bot never
 touches the exchange. If a paper control arm strands simulated dust whose market
-is gone, clear it with `npm run reset-control` while the service is stopped.
+is gone, or a halt is stuck, clear it with `npm run reset-control` while the
+service is stopped (it refunds positions at cost and clears the halt).
 
 > **This can trade real money.** With `mode: "live"` and a bot set to
 > `paper: false`, it submits live market orders on Coinbase. It is not investment

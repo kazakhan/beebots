@@ -127,6 +127,7 @@ test("a paper control arm books a position without touching the exchange", async
   // The fill is settled through the same ledger path, so cash moved.
   assert.ok(Number(f.s.read().bots.control.cash) < 100);
   assert.equal(f.s.pending().length, 0, "paper fills settle immediately");
+  assert.equal(f.s.read().halt, null, "no spurious halt from a paper fill");
   f.s.close();
 });
 

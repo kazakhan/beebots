@@ -14,6 +14,36 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.0.3] - 2026-10-01 - Exact paper fills; reset-control clears a sticky halt
+
+Root cause of the repeated `"Exchange buy value exceeded requested quote size"`
+on the paper control. 3.0.2 stopped rounding paper order sizes to the exchange
+increment, so a size could carry 18 decimals. `paperFill` then made the fill
+with floats and `toFixed(12)`, which could round **up** above the requested
+size; `applyOrder` treats a reported value larger than the requested quote size
+as a halt. The halt is persisted and never cleared, so it kept blocking the
+arm's entries.
+
+### Fixed
+
+- **`paperFill` is exact fixed-point and never exceeds the request.** The value
+  is the requested quote size for a buy and `size * price` for a sell, computed
+  with the decimal helpers; the base quantity is floored by integer division; the
+  touch price comes from the book's raw decimal string, so sub-micro prices no
+  longer hit exponential `String(Number)` notation. No float rounding, no
+  overshoot, no halt. (`engine.mjs`)
+- **`npm run reset-control` now also clears a sticky halt**, since a halt (once
+  persisted) is otherwise permanent, even across restarts. The tool still refuses
+  a real control arm and refuses while the runtime owns the ledger.
+
+### Verification
+
+- 213 Node tests pass (`npm test`), up from 208: paper-fill value/quantity never
+  exceed the request (including the 13-decimal round-up case and a sub-micro
+  price), a paper buy sets no halt, and reset clears a halt.
+
+---
+
 ## [3.0.2] - 2026-10-01 - Paper arms ignore exchange increments too
 
 Follow-up to 3.0.1. Exempting paper arms from the exchange _minimum_ was not

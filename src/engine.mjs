@@ -9,6 +9,7 @@ import {
   floorStep,
   add,
   availableAmount,
+  SCALE,
 } from "./decimal.mjs";
 import { eligibility, assertTradable } from "./market.mjs";
 import { executionPlan, VERSION } from "./strategy-v2.mjs";
@@ -24,7 +25,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.0.2";
+const BUILD = "3.0.3";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -37,13 +38,29 @@ const CONTROL_STRATEGY =
 
 // Simulated IOC fill at the touch, shaped like the exchange order object that
 // applyOrder consumes. A BUY `size` is quote (USDC); a SELL `size` is base.
-function paperFill(order, q, feeRate) {
-  const price = order.side === "BUY" ? Number(q.ask) : Number(q.bid);
-  if (!(price > 0)) throw Error("Invalid paper fill price");
+//
+// Computed in exact fixed-point, not floats: a paper order size is now full
+// precision (3.0.2 stopped rounding it to the exchange increment), and
+// Number/toFixed rounding could make the reported value exceed the requested
+// size, which applyOrder treats as a halt. The value never exceeds the request.
+export function paperFill(order, q, feeRate) {
+  const raw = order.side === "BUY" ? q.asks?.[0]?.price : q.bids?.[0]?.price;
+  // Prefer the book's raw decimal string; fall back to the numeric touch.
+  const priceStr = String(raw ?? (order.side === "BUY" ? q.ask : q.bid));
+  if (!(Number(priceStr) > 0)) throw Error("Invalid paper fill price");
+  const toDec = (n) => {
+    const s = String(n);
+    return s.includes("e") || s.includes("E") ? Number(n).toFixed(18) : s;
+  };
+  const feeStr = toDec(feeRate);
+  // BigInt division truncates, so the base quantity is floored and its value can
+  // never exceed the quote size originally requested.
   const baseQty =
-    order.side === "BUY" ? Number(order.size) / price : Number(order.size);
-  const value = order.side === "BUY" ? Number(order.size) : baseQty * price;
-  const fmt = (n) => n.toFixed(12).replace(/0+$/, "").replace(/\.$/, "");
+    order.side === "BUY"
+      ? str((dec(order.size) * SCALE) / dec(priceStr))
+      : order.size;
+  const value = order.side === "BUY" ? order.size : mul(order.size, priceStr);
+  const fees = mul(value, feeStr);
   return {
     order_id: "paper-" + order.id,
     client_order_id: order.id,
@@ -51,9 +68,9 @@ function paperFill(order, q, feeRate) {
     side: order.side,
     status: "FILLED",
     settled: true,
-    filled_size: fmt(baseQty),
-    filled_value: fmt(value),
-    total_fees: fmt(value * feeRate),
+    filled_size: baseQty,
+    filled_value: value,
+    total_fees: fees,
   };
 }
 export class Engine {
