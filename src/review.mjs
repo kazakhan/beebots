@@ -1,19 +1,18 @@
-// Trade Review — hourly self-assessment.
+// Trade Review — hourly self-assessment of both the bots and Laya.
 //
-// Laya reads the previous hour as text and answers four structured heads; the
-// decision model turns those answers into bounded proposals for changing either
-// the questions Laya is asked or a bot's rubric. Proposals are only applied when
-// the evidence gate allows it, and applied changes live as overrides under the
-// data directory (the service cannot write to the web root).
+// Laya reads the previous hour as text and answers a set of classified heads;
+// the decision model turns those answers into bounded proposals that may change
+// a bot's written rubric or Laya's own question sets. Proposals are applied only
+// when the evidence gate allows it, and applied changes live as overrides under
+// the data directory (the service cannot write to the web root).
 //
-// This module never touches risk parameters. Targets are prose only: the Laya
-// question set and the per-bot rubric text. Everything numeric - stops, sizing,
-// riskPct, maxPositions, capital, mode - is out of scope by construction.
+// Targets are prose only. Everything numeric - stops, sizing, riskPct,
+// maxPositions, capital, mode - is out of scope by construction.
 import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
   existsSync,
+  writeFileSync,
+  readFileSync,
+  renameSync,
   mkdirSync,
   readdirSync,
   unlinkSync,
@@ -21,17 +20,37 @@ import {
 import { join } from "node:path";
 import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
+import {
+  ALLOWED_TARGETS,
+  targetAllowed,
+  overridePath,
+  readOverride,
+  readJsonOverride,
+  validateOverride,
+} from "./overrides.mjs";
 
-// Minimum closed round-trips per arm before a change may be applied at all. Set
-// in advance, per the project's change protocol, so the bar cannot drift.
-export const MIN_SAMPLE = 50;
+export { ALLOWED_TARGETS, targetAllowed };
+
+// Minimum closed round-trips before an EDGE change (a bot rubric or Laya's
+// trading questions) may be applied. Structural changes - the review's own
+// questions - are exempt because they cannot affect trading.
+export const MIN_SAMPLE = 10;
 // Relative expectancy improvement required over the control arm.
 export const MIN_MARGIN = 0.1;
 // Hours a proposal must hold in shadow before promotion.
 export const SHADOW_HOURS = 24;
 
-// The four heads Laya answers over the hour. Deliberately short, and phrased as
-// classification (not decisions), matching the project's Laya usage elsewhere.
+export const STRATEGY_ARMS = ["breakout", "trend", "momentum"];
+export const CONTROL_ARM = "control";
+
+// A structural change edits only what the review asks itself; it cannot reach
+// trading. Everything else is an edge change and is sample-gated.
+export function tierOf(target) {
+  return target === "laya.reviewQuestions" ? "structural" : "edge";
+}
+
+// The heads Laya answers over the hour. `exit_timing` deliberately offers
+// insufficient_evidence so a hold with no trigger is not forced into a label.
 export const REVIEW_QUESTIONS = {
   missed_opportunity: {
     type: "noul",
@@ -44,12 +63,15 @@ export const REVIEW_QUESTIONS = {
     type: "choice",
     instructions:
       "Classify how the hour's position exits were timed, judged only from the " +
-      "evidence shown. If there were no exits, choose insufficient_evidence.",
+      "evidence shown. Choose no_exit_event when no SELL trigger, stop touch, " +
+      "trail activation or elapsed max hold occurred; a hold with no trigger is " +
+      "not evidence about exit timing.",
     criteria: {
       early: "Closed before the thesis had a chance to resolve",
       late: "Held past the point the evidence had turned",
       appropriate: "Exits matched the evidence available at the time",
-      insufficient_evidence: "Too little closed activity to judge",
+      no_exit_event: "No exit-relevant event occurred this hour",
+      insufficient_evidence: "Too little evidence to judge",
     },
   },
   failing_rubric: {
@@ -62,6 +84,7 @@ export const REVIEW_QUESTIONS = {
       trend: "Keeper's trend rules",
       momentum: "Spark's momentum rules",
       control: "The control arm",
+      laya: "Laya's classifications were the weak link",
       none: "No rubric is implicated",
     },
   },
@@ -72,11 +95,23 @@ export const REVIEW_QUESTIONS = {
       "complete and consistent enough to support the decisions made?",
     criteria: ["poor", "mixed", "good", "strong"],
   },
+  laya_value: {
+    type: "choice",
+    instructions:
+      "Did Laya's classifications add usable information this hour, judged " +
+      "against the outcomes shown? Choose insufficient when no trade resolved.",
+    criteria: {
+      helpful: "Laya's labels tracked the outcomes",
+      neutral: "Laya added little either way",
+      misleading: "Laya's labels pointed away from the outcomes",
+      insufficient: "Too few resolved outcomes to judge",
+    },
+  },
 };
 
 // Phrases every rubric must retain. A proposal that drops any of them is
 // rejected outright - otherwise an LLM can strip a safety instruction while
-// looking "better" on the score.
+// looking "better".
 export const PROTECTED_INVARIANTS = [
   /no shorts/i,
   /uncalibrated/i,
@@ -90,45 +125,135 @@ export function protectedInvariantsHold(text) {
   return PROTECTED_INVARIANTS.every((re) => re.test(text));
 }
 
-// Targets a proposal may name. Prose only.
-export const ALLOWED_TARGETS = [
-  "laya.questions",
-  "laya.fields",
-  "rubric.breakout",
-  "rubric.trend",
-  "rubric.momentum",
-];
-export function targetAllowed(target) {
-  return ALLOWED_TARGETS.includes(target);
-}
-
 // Closed round-trips per bot, reconstructed from the orders ledger exactly as
 // performance.mjs does. Used as the sample count for the gate.
 export function closedTrades(orders) {
+  return Object.fromEntries(
+    Object.entries(closedRoundTrips(orders)).map(([bot, trips]) => [
+      bot,
+      trips.length,
+    ]),
+  );
+}
+
+// Full round-trips with their product, open time and realised P&L, so Laya's
+// labels can be joined to outcomes.
+export function closedRoundTrips(orders) {
   const positions = new Map(),
-    counts = {};
+    trips = {};
   for (const o of Object.values(orders).sort((a, b) => a.created - b.created)) {
-    counts[o.bot] ??= 0;
     const q = dec(o.filled || "0");
     if (q <= 0n) continue;
     const key = o.bot + ":" + o.product;
-    const p = positions.get(key) || { quantity: 0n, cost: 0n };
+    const p = positions.get(key) || {
+      quantity: 0n,
+      cost: 0n,
+      opened: o.created,
+    };
     const value = dec(o.value || "0"),
       fees = dec(o.fees || "0");
     if (o.side === "BUY") {
+      if (p.quantity === 0n) p.opened = o.created;
       p.quantity += q;
       p.cost += value + fees;
       positions.set(key, p);
     } else if (o.side === "SELL") {
       if (p.quantity < q) continue;
       const basis = (p.cost * q) / p.quantity;
+      const pnl = value - fees - basis;
+      (trips[o.bot] ??= []).push({
+        bot: o.bot,
+        product: o.product,
+        opened: p.opened,
+        closed: o.created,
+        pnl,
+      });
       p.quantity -= q;
       p.cost -= basis;
       positions.set(key, p);
-      counts[o.bot] += 1;
     }
   }
-  return counts;
+  return trips;
+}
+
+const fitBucket = (fit) =>
+  !Number.isFinite(fit)
+    ? "unmatched"
+    : fit < 1
+      ? "low"
+      : fit <= 1.5
+        ? "mid"
+        : "high";
+
+// Evaluate Laya against reality over the window: how its labels distribute, and
+// whether the fit it assigned before an entry tracked the trade's outcome.
+// The trade-to-analysis join is approximate: it uses the most recent analysis
+// for the same product before the position opened.
+export function layaPerformance({ events, orders, since = 0 }) {
+  const analyses = events.filter((e) => e.kind === "analysis" && e.ts >= since);
+  const regime = {},
+    quality = {},
+    fit = {
+      low: { n: 0, wins: 0, pnl: 0 },
+      mid: { n: 0, wins: 0, pnl: 0 },
+      high: { n: 0, wins: 0, pnl: 0 },
+    };
+  for (const a of analyses) {
+    const r = a.answers?.regime?.choice;
+    const q = a.answers?.quality?.choice;
+    if (r) regime[r] = (regime[r] ?? 0) + 1;
+    if (q) quality[q] = (quality[q] ?? 0) + 1;
+  }
+  const byProduct = new Map();
+  for (const a of analyses) {
+    const list = byProduct.get(a.product) ?? [];
+    list.push(a);
+    byProduct.set(a.product, list);
+  }
+  const trips = Object.values(closedRoundTrips(orders)).flat();
+  let matched = 0;
+  for (const t of trips) {
+    const list = (byProduct.get(t.product) ?? []).filter(
+      (a) => a.ts <= t.opened,
+    );
+    if (!list.length) continue;
+    const latest = list.at(-1);
+    const b = fitBucket(Number(latest.answers?.fit?.score));
+    if (b === "unmatched") continue;
+    matched++;
+    fit[b].n++;
+    if (t.pnl > 0n) fit[b].wins++;
+    fit[b].pnl += Number(t.pnl) / 1e18;
+  }
+  return {
+    regime,
+    quality,
+    fit,
+    analyses: analyses.length,
+    trips: trips.length,
+    matched,
+  };
+}
+
+function perfLines(p) {
+  const out = [];
+  const dist = (o) =>
+    Object.entries(o)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(" ") || "none";
+  out.push(
+    `LAYA PERFORMANCE — ${p.analyses} labels, ${p.trips} closed trips, ${p.matched} joined`,
+  );
+  out.push(`- regime: ${dist(p.regime)}`);
+  out.push(`- quality: ${dist(p.quality)}`);
+  for (const b of ["low", "mid", "high"]) {
+    const x = p.fit[b];
+    if (!x.n) continue;
+    out.push(
+      `- entry fit ${b}: n=${x.n} wins=${x.wins} winRate=${((x.wins / x.n) * 100).toFixed(0)}% pnl=${x.pnl.toFixed(2)}`,
+    );
+  }
+  return out;
 }
 
 // Build the hour as text for Laya. Bounded: the daemon's context is finite and
@@ -172,23 +297,29 @@ export function buildHourState({ events, orders, coverage, since, until }) {
       lines.push(
         `- ${o.bot} ${o.side} ${o.product} filled=${o.filled} value=${o.value} fees=${o.fees} reason=${String(o.reason ?? "").slice(0, 200)}`,
       );
+  lines.push(...perfLines(layaPerformance({ events, orders, since })));
   return lines.join("\n");
 }
 
 const REVIEW_SYSTEM =
-  "You review one hour of an automated spot-trading system to propose " +
-  "improvements. You are given structured summaries of the decisions taken, " +
-  "Laya's classifications, the eligible setups, and the fills, followed by " +
-  "Laya's own answers about the hour. Propose AT MOST 3 changes. A change may " +
-  "only target the exact text of Laya's questions or a bot's written rubric. " +
-  "You must never propose changes to numeric risk parameters, stop levels, " +
-  "position sizing, capital, mode, or code. Every proposed rubric must retain " +
-  "its safety clauses: no shorts, Laya is uncalibrated evidence not a decision " +
-  "or probability, code controls size and execution, do not alter stops, do not " +
-  "force trades. If the hour shows no problem worth changing, return an empty " +
-  "proposals list. Return only JSON: " +
+  "You review one hour of an automated spot-trading system and propose " +
+  "improvements to EITHER the bots' written rubrics OR Laya's own question " +
+  "sets. Two jobs: (1) judge the bots against the hour's decisions and " +
+  "outcomes; (2) judge Laya itself - do its classifications track outcomes, " +
+  "and is it being asked the right questions? You are given the decisions, " +
+  "Laya's classifications and a Laya performance table, the eligible setups, " +
+  "the fills, Laya's answers, and the CURRENT full text of every editable " +
+  "target. Propose AT MOST 3 changes. Each proposal's `proposed` field MUST be " +
+  "the COMPLETE replacement document - the full rubric text (with its heading) " +
+  "or the full question-set JSON - not a description or a diff; `current` must " +
+  "be the exact current text you are replacing. A rubric must retain its safety " +
+  "clauses: no shorts, Laya is uncalibrated evidence not a decision or " +
+  "probability, code controls size and execution, do not alter stops, do not " +
+  "force trades. You must never propose changes to numeric risk parameters, " +
+  "stop levels, position sizing, capital, mode, or code. If nothing is worth " +
+  "changing, return an empty proposals list. Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
-  '"proposals":[{"target":"laya.questions|rubric.breakout|rubric.trend|rubric.momentum",' +
+  '"proposals":[{"target":"laya.reviewQuestions|laya.analysisQuestions|rubric.breakout|rubric.trend|rubric.momentum",' +
   '"current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
 export class TradeReview {
@@ -198,24 +329,28 @@ export class TradeReview {
     this.model = model;
     this.config = config;
     this.dataDir = dataDir;
-    this.dir = join(dataDir, "rubrics");
   }
-  // Overrides live under the writable data directory: the service runs with
-  // ProtectSystem=strict and cannot write to the web root.
-  overridePath(id) {
-    return join(this.dir, `${id}.md`);
+  reviewQuestions() {
+    return readJsonOverride(
+      this.dataDir,
+      "laya.reviewQuestions",
+      REVIEW_QUESTIONS,
+    );
   }
+  // The engine's effective rubric: an applied override, else the bundled text.
   rubric(id, fallback) {
-    const p = this.overridePath(id);
-    try {
-      if (existsSync(p)) return readFileSync(p, "utf8");
-    } catch {
-      // fall through to the bundled rubric
-    }
-    return fallback;
+    return readOverride(this.dataDir, `rubric.${id}`) ?? fallback;
   }
-  questionsPath() {
-    return join(this.dataDir, "laya-questions.json");
+  // The current text of every editable target, for the model to rewrite.
+  currentTargets() {
+    const out = {
+      "laya.reviewQuestions": JSON.stringify(this.reviewQuestions(), null, 1),
+    };
+    for (const id of STRATEGY_ARMS) {
+      const t = readOverride(this.dataDir, `rubric.${id}`);
+      if (t) out[`rubric.${id}`] = t;
+    }
+    return out;
   }
   // One hourly pass: gather the hour, let Laya classify it, let the model propose
   // changes, gate each proposal, and apply only what the evidence supports.
@@ -224,6 +359,11 @@ export class TradeReview {
       .recent(2000)
       .filter((e) => e.ts >= since && e.ts < until);
     const s = this.store.read();
+    const perf = layaPerformance({
+      events: this.store.recent(5000),
+      orders: s.orders,
+      since,
+    });
     const state = buildHourState({
       events,
       orders: s.orders,
@@ -235,7 +375,7 @@ export class TradeReview {
     try {
       laya = await this.laya.ask(
         { content: state, kind: "trade_review" },
-        REVIEW_QUESTIONS,
+        this.reviewQuestions(),
       );
     } catch (e) {
       laya = { error: e.message };
@@ -245,8 +385,13 @@ export class TradeReview {
       proposals = [],
       error = null;
     if (!laya.error) {
+      const targets = this.currentTargets();
       const user =
-        state + "\n\nLAYA ANSWERS\n" + JSON.stringify(laya.answers, null, 1);
+        state +
+        "\n\nLAYA ANSWERS\n" +
+        JSON.stringify(laya.answers, null, 1) +
+        "\n\nCURRENT TARGETS\n" +
+        JSON.stringify(targets, null, 1);
       try {
         const r = await this.model.review(REVIEW_SYSTEM, user);
         summary = typeof r.data?.summary === "string" ? r.data.summary : null;
@@ -273,7 +418,11 @@ export class TradeReview {
     }
     const sample = closedTrades(s.orders);
     const reviewed = proposals.map((p) => {
-      const gate = evaluateGate({ proposal: p, sample });
+      const gate = evaluateGate({
+        proposal: p,
+        sample,
+        minSample: this.config?.review?.minSample,
+      });
       let applied = false;
       if (gate.ok && autoApply) {
         try {
@@ -292,13 +441,12 @@ export class TradeReview {
       observations,
       proposals: reviewed,
       sample,
+      layaPerf: perf,
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
       error,
     };
-    // The full record lives in state (bounded); the event carries only a summary
-    // so the stream stays small.
     this.store.change(
       (st) => {
         st.lastReview = record;
@@ -313,29 +461,26 @@ export class TradeReview {
     );
     return record;
   }
-  // Apply a proposal that already passed the gate. One file at a time, backed up,
-  // written atomically, and recorded as an audit event.
+  // Apply a proposal that already passed the gate. One file at a time, backed
+  // up, written atomically, and recorded as an audit event.
   apply(proposal) {
-    if (!targetAllowed(proposal.target))
-      throw Error("Proposal target is out of scope");
-    if (!protectedInvariantsHold(proposal.proposed))
-      throw Error("Proposal drops a protected safety clause");
-    let path, value;
-    if (proposal.target.startsWith("rubric.")) {
-      mkdirSync(this.dir, { recursive: true, mode: 0o750 });
-      path = this.overridePath(proposal.target.slice("rubric.".length));
-      value = proposal.proposed;
-    } else {
-      path = this.questionsPath();
-      value = proposal.proposed;
-    }
+    const invalid = validateOverride(proposal.target, proposal.proposed, {
+      invariantsHold: protectedInvariantsHold,
+    });
+    if (invalid) throw Error(invalid);
+    const path = overridePath(this.dataDir, proposal.target);
+    mkdirSync(join(this.dataDir, "overrides"), {
+      recursive: true,
+      mode: 0o750,
+    });
     const backup = path + ".bak-" + Date.now();
     if (existsSync(path)) writeFileSync(backup, readFileSync(path));
     const tmp = path + ".tmp";
-    writeFileSync(tmp, value, { mode: 0o640 });
+    writeFileSync(tmp, proposal.proposed, { mode: 0o640 });
     renameSync(tmp, path);
     this.store.event("change", {
       target: proposal.target,
+      tier: tierOf(proposal.target),
       rationale: proposal.rationale,
       backup,
       message: `Applied review proposal to ${proposal.target}`,
@@ -343,14 +488,10 @@ export class TradeReview {
     return { path, backup };
   }
   revert(target) {
-    if (!targetAllowed(target)) throw Error("Proposal target is out of scope");
-    const path = target.startsWith("rubric.")
-      ? this.overridePath(target.slice("rubric.".length))
-      : this.questionsPath();
+    if (!targetAllowed(target)) throw Error("Target is out of scope");
+    const path = overridePath(this.dataDir, target);
     const latest = latestBackup(path);
     if (!latest) {
-      // No backup means the override was created fresh by the review; removing
-      // it restores the bundled rubric. That is the revert.
       try {
         unlinkSync(path);
       } catch {
@@ -385,19 +526,40 @@ function latestBackup(path) {
   }
 }
 
-// The evidence gate. Returns { ok, reasons[] } without side effects, so the
-// caller can log a rejection and the card can show why nothing was applied.
-export function evaluateGate({ proposal, sample, minSample = MIN_SAMPLE }) {
+// The evidence gate. Returns { ok, reasons[], tier } without side effects.
+// Structural changes (the review's own questions) are ungated; edge changes need
+// the target arm to have run minSample closed trades AND a control baseline of
+// the same size before their profitability claim is honoured.
+export function evaluateGate({
+  proposal,
+  sample,
+  minSample = MIN_SAMPLE,
+  controlArm = CONTROL_ARM,
+}) {
   const reasons = [];
   if (!targetAllowed(proposal.target))
     reasons.push(`Target ${proposal.target} is out of scope`);
-  if (!protectedInvariantsHold(proposal.proposed))
-    reasons.push("Proposed text drops a protected safety clause");
-  const arms = Object.values(sample ?? {});
-  const floor = arms.length ? Math.min(...arms) : 0;
-  if (floor < minSample)
-    reasons.push(
-      `Insufficient sample: ${floor} closed trades on the thinnest arm, need ${minSample}`,
-    );
-  return { ok: reasons.length === 0, reasons };
+  const invalid = validateOverride(proposal.target, proposal.proposed, {
+    invariantsHold: protectedInvariantsHold,
+  });
+  if (invalid) reasons.push(invalid);
+  const tier = tierOf(proposal.target);
+  if (tier === "edge") {
+    const arm = proposal.target.startsWith("rubric.")
+      ? proposal.target.slice("rubric.".length)
+      : null;
+    const count = arm
+      ? (sample?.[arm] ?? 0)
+      : STRATEGY_ARMS.reduce((n, a) => n + (sample?.[a] ?? 0), 0);
+    if (count < minSample)
+      reasons.push(
+        `Insufficient sample: ${count} closed trades ${arm ? `on ${arm}` : "across strategy arms"}, need ${minSample}`,
+      );
+    const control = sample?.[controlArm] ?? 0;
+    if (control < minSample)
+      reasons.push(
+        `Control baseline immature: ${control}/${minSample} closed trades`,
+      );
+  }
+  return { ok: reasons.length === 0, reasons, tier };
 }

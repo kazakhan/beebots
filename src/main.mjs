@@ -52,8 +52,16 @@ try {
     dataDir: config.dataDir,
     fallback: config.model,
   });
-  const laya = new Laya(config.layaSocket, config.layaTimeoutMs);
-  const model = new DecisionModel(config.model, config.modelTimeoutMs, settings);
+  const laya = new Laya(
+    config.layaSocket,
+    config.layaTimeoutMs,
+    config.dataDir,
+  );
+  const model = new DecisionModel(
+    config.model,
+    config.modelTimeoutMs,
+    settings,
+  );
   // Hourly self-assessment. Runs on the wall clock; see Engine.scheduleReview.
   const reviewer = new TradeReview({
     store,

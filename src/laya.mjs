@@ -1,9 +1,62 @@
 import net from "node:net";
+import { readJsonOverride } from "./overrides.mjs";
+
+// The default trading-classification questions Laya answers per candidate. The
+// Trade Review may override these; the heads and answer types are fixed so the
+// response schema stays checkable, while the instructions (and choice labels)
+// are editable.
+export function defaultAnalysisQuestions(style) {
+  return {
+    regime: {
+      type: "choice",
+      instructions:
+        "Classify the observed price context, not a trading action.",
+      criteria: {
+        uptrend: "Sustained upward trend",
+        range: "Sideways range",
+        downtrend: "Downward trend",
+        unclear: "Insufficient or conflicting evidence",
+      },
+    },
+    fit: {
+      type: "score",
+      instructions: `Classify evidence of a ${style} setup. Do not choose a trade.`,
+      criteria: ["weak", "mixed", "strong"],
+    },
+    quality: {
+      type: "choice",
+      instructions: "Classify the supplied evidence quality.",
+      criteria: {
+        complete: "Complete and consistent",
+        mixed: "Conflicting signals",
+        insufficient: "Missing important evidence",
+      },
+    },
+  };
+}
+
+// Merge an override onto the defaults so a partial file still works.
+export function resolveAnalysisQuestions(style, override) {
+  const base = defaultAnalysisQuestions(style);
+  if (!override || typeof override !== "object") return base;
+  return {
+    regime: { ...base.regime, ...override.regime },
+    fit: { ...base.fit, ...override.fit },
+    quality: { ...base.quality, ...override.quality },
+  };
+}
+
 export class Laya {
-  constructor(socketPath, timeoutMs = 30000) {
+  constructor(socketPath, timeoutMs = 30000, dataDir = null) {
     this.path = socketPath;
     this.timeoutMs = timeoutMs;
+    this.dataDir = dataDir;
     this.tail = Promise.resolve();
+  }
+  questionsOverride() {
+    return this.dataDir
+      ? readJsonOverride(this.dataDir, "laya.analysisQuestions", null)
+      : null;
   }
   request(body, timeoutMs = this.timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -101,50 +154,24 @@ export class Laya {
       ])
         if (Number.isFinite(state[key]))
           compact[key] = Number(state[key].toPrecision(6));
-      const r = await this.request(
-        {
-          state: compact,
-          questions: {
-            regime: {
-              type: "choice",
-              instructions:
-                "Classify the observed price context, not a trading action.",
-              criteria: {
-                uptrend: "Sustained upward trend",
-                range: "Sideways range",
-                downtrend: "Downward trend",
-                unclear: "Insufficient or conflicting evidence",
-              },
-            },
-            fit: {
-              type: "score",
-              instructions: `Classify evidence of a ${style} setup. Do not choose a trade.`,
-              criteria: ["weak", "mixed", "strong"],
-            },
-            quality: {
-              type: "choice",
-              instructions: "Classify the supplied evidence quality.",
-              criteria: {
-                complete: "Complete and consistent",
-                mixed: "Conflicting signals",
-                insufficient: "Missing important evidence",
-              },
-            },
-          },
-        },
-        deadline,
+      // The questions may have been overridden by an applied Trade Review
+      // proposal; the heads and answer types are fixed, so validation reads the
+      // effective criteria rather than a hard-coded set.
+      const questions = resolveAnalysisQuestions(
+        style,
+        this.questionsOverride(),
       );
+      const r = await this.request({ state: compact, questions }, deadline);
+      const regimeChoices = Object.keys(questions.regime.criteria ?? {});
+      const qualityChoices = Object.keys(questions.quality.criteria ?? {});
+      const fitMax = Math.max(0, (questions.fit.criteria?.length ?? 3) - 1);
       if (
         !r.answers ||
         !Number.isFinite(r.answers.fit?.score) ||
         r.answers.fit.score < 0 ||
-        r.answers.fit.score > 2 ||
-        !["uptrend", "range", "downtrend", "unclear"].includes(
-          r.answers.regime?.choice,
-        ) ||
-        !["complete", "mixed", "insufficient"].includes(
-          r.answers.quality?.choice,
-        )
+        r.answers.fit.score > fitMax ||
+        !regimeChoices.includes(r.answers.regime?.choice) ||
+        !qualityChoices.includes(r.answers.quality?.choice)
       )
         throw Error("Unexpected Laya answer schema");
       return {

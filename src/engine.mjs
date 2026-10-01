@@ -16,7 +16,7 @@ import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "2.7.0";
+const BUILD = "2.8.0";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.

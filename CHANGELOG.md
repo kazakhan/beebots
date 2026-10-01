@@ -14,6 +14,79 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [2.8.0] - 2026-10-01 - Trade Review: Laya is a subject, and the gate is relaxed
+
+The Trade Review now assesses **Laya itself**, not only the bots, and can
+actually change what Laya is asked — which is what the brief called for.
+
+### Added
+
+- **Laya performance in every review.** The review gathers Laya's label
+  distribution for the window, and joins each closed trade's outcome to the
+  Laya analysis that preceded its entry — win rate and P&L per `fit` bucket and
+  per `regime`. The join is approximate (most recent analysis for the product
+  before the entry) and is labelled as such on the card.
+- A fifth review head, **`laya_value`** (`helpful`/`neutral`/`misleading`/
+  `insufficient`); **`failing_rubric` gains a `laya` criterion** so Laya can be
+  named as the weak link; `exit_timing` gains an explicit **`no_exit_event`**
+  option so a hold with no trigger is no longer forced into "late".
+- A single **override registry** (`src/overrides.mjs`) under
+  `<dataDir>/overrides/`, one file per editable target, shared by the engine
+  (rubrics), the review, and Laya. Targets:
+  - `laya.reviewQuestions` — the heads Laya answers during the review.
+  - `laya.analysisQuestions` — the `regime`/`fit`/`quality` questions Laya
+    answers during trading analysis (now actually consumed by `laya.analyze`).
+  - `rubric.breakout|trend|momentum` — the bot rubrics.
+  - `laya.fields` is **removed**: the checkpoint field contract is code.
+
+### Changed
+
+- **Full replacement text, validated before writing.** The review prompt requires
+  `proposed` to be the complete document and `current` the exact text replaced.
+  `apply()` refuses anything that is not: a rubric must have a heading, a real
+  length, and all five safety clauses; a Laya question set must parse as JSON
+  with the expected heads and answer types. A fragment can no longer overwrite a
+  rubric — this was a real hole, since the old gate only regex-checked five
+  phrases.
+- **Relaxed, tiered gate.** `review.minSample` default **10** (was 50), counted
+  **per target arm** rather than as the minimum across every arm — the control no
+  longer pins it. Structural changes (`laya.reviewQuestions`) are **ungated**;
+  edge changes (`rubric.*`, `laya.analysisQuestions`) need the arm's sample plus a
+  control baseline of the same size. `review.minSample` and `review.autoApply` are
+  configurable.
+- **The card no longer truncates proposals.** It shows the full
+  `current → proposed` in an expandable block, the target tier, the gate reasons,
+  and a Laya performance table.
+- The review prompt now asks for a Laya assessment explicitly and lists every
+  target's current text so the model rewrites rather than describes.
+
+### Verification
+
+- 171 Node tests pass (`npm test`), up from 168. `test/review.test.mjs` rewritten:
+  target scope, fragment/JSON validation, structural-vs-edge gating, the control
+  pinning only edge changes, the fit→outcome join, the hour-state Laya section,
+  override apply/revert/consume. `test/laya-optional.test.mjs` adds analysis
+  question overrides and corrupt-override fallback.
+- No test contacts a provider or an exchange.
+
+### Deploy
+
+Copy the source, `systemctl restart beebots`. Applied overrides live under
+`/var/lib/beebots/overrides/` (writable inside the sandbox). To review them:
+`ls /var/lib/beebots/overrides/`. New config knobs are optional.
+
+### Rollback
+
+```sh
+cp -a _backups/2.8.0_20261001-073530/. .
+rm -rf /var/lib/beebots/overrides
+systemctl restart beebots
+```
+
+Remove applied overrides as well; they are not part of the backup.
+
+---
+
 ## [2.7.0] - 2026-10-01 - Shareable: Coinbase key options, optional Laya, scrub
 
 Preparing the project to be published and run by someone else.

@@ -54,6 +54,24 @@ export function validate(c) {
     );
   if (c.layaEnabled !== undefined && typeof c.layaEnabled !== "boolean")
     throw Error("layaEnabled must be boolean");
+  if (c.review !== undefined) {
+    if (
+      typeof c.review !== "object" ||
+      c.review === null ||
+      Array.isArray(c.review)
+    )
+      throw Error("Invalid review block");
+    if (
+      c.review.minSample !== undefined &&
+      (!Number.isInteger(c.review.minSample) || c.review.minSample < 1)
+    )
+      throw Error("Invalid review.minSample");
+    if (
+      c.review.autoApply !== undefined &&
+      typeof c.review.autoApply !== "boolean"
+    )
+      throw Error("Invalid review.autoApply");
+  }
   if (/\/(var\/www|htdocs|public_html)(\/|$)/.test(c.dataDir))
     throw Error("Data must be outside web root");
   if (

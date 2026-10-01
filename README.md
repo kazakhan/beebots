@@ -192,12 +192,25 @@ path, never touching the exchange. Setting `"paper": false` and funding its
 ledger switches it to real funds.
 
 An **hourly Trade Review** runs at `:00`. It sends the previous hour to Laya as
-text; Laya answers four classified heads; the decision model turns those into at
-most three proposals to change the Laya question set or a bot's rubric. A
-proposal is applied only if it stays in scope (prose only — never risk numbers,
-capital, mode or code), retains every protected safety clause, and the thinnest
-arm has at least 50 closed trades. Until that sample exists nothing is applied.
-Applied changes live as overrides under the data directory and feed `ruleHash`.
+text; Laya answers five classified heads; the decision model turns those into at
+most three proposals that change a bot's rubric **or Laya's own question sets**
+— the review judges Laya as well as the bots, using a table of Laya's label
+distribution and the win rate / P&L its pre-entry `fit` tracked.
+
+A proposal is applied only when it stays in scope (prose only — never risk
+numbers, capital, mode or code), is a **complete validated document** (a rubric
+with a heading and every safety clause, or a JSON question set with the expected
+heads), and passes the evidence gate:
+
+- `laya.reviewQuestions` (the review's own questions) is **structural** and
+  ungated — it cannot affect trading.
+- `rubric.*` and `laya.analysisQuestions` are **edge** changes: they need
+  `review.minSample` (**10**) closed trades on the target arm, plus a control
+  baseline of the same size.
+
+Applied changes are files under `/var/lib/beebots/overrides/`, feed `ruleHash`,
+and can be reverted individually. `review.minSample` and `review.autoApply` are
+configurable.
 
 See [deployment handover](deploy/INSTALL.md) for activation, limitations and
 permissions. The app is built locally; no server deployment or real trade has

@@ -59,7 +59,7 @@ const engine = {
     strategyVersion: 2,
     // Matches the backend build the page expects, so the version-skew check does
     // not fire against the synthetic preview.
-    build: "2.7.0",
+    build: "2.8.0",
     // Synthetic free-model fixture: proves the cost line and provider-driven
     // labels render without any provider connection.
     modelUsage: {
@@ -107,20 +107,35 @@ const engine = {
           risk: "May skip valid setups with quiet volume.",
           gate: {
             ok: false,
+            tier: "edge",
             reasons: [
-              "Insufficient sample: 1 closed trades on the thinnest arm, need 50",
+              "Insufficient sample: 1 closed trades on breakout, need 10",
+              "Control baseline immature: 0/10 closed trades",
             ],
           },
           applied: false,
         },
       ],
-      sample: { breakout: 1, trend: 2, momentum: 9, control: 4 },
+      sample: { breakout: 1, trend: 2, momentum: 9, control: 0 },
+      layaPerf: {
+        analyses: 61,
+        trips: 24,
+        matched: 12,
+        regime: { uptrend: 22, range: 30, downtrend: 9 },
+        quality: { complete: 40, mixed: 18, insufficient: 3 },
+        fit: {
+          low: { n: 3, wins: 1, pnl: -2.4 },
+          mid: { n: 5, wins: 2, pnl: -0.8 },
+          high: { n: 4, wins: 3, pnl: 3.1 },
+        },
+      },
       laya: {
         answers: {
           missed_opportunity: { noul: 0.41 },
           exit_timing: { choice: "late" },
           failing_rubric: { choice: "momentum" },
           evidence_quality: { score: 1.5 },
+          laya_value: { choice: "neutral" },
         },
         elapsed_s: 0.8,
       },

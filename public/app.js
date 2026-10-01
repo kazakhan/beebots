@@ -86,7 +86,7 @@ function costTitle(s) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "2.7.0";
+const EXPECTED_BUILD = "2.8.0";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -147,13 +147,33 @@ function renderReview(s) {
           `<p class="observation"><b>${esc(o.bot)}</b> · ${esc(o.issue)} <span class="muted">${esc(o.evidence)}</span></p>`,
       )
       .join("");
+  // Laya's own performance: how its labels distributed and whether the fit it
+  // assigned before an entry tracked the outcome. The join is approximate.
+  if (r.layaPerf) {
+    const p = r.layaPerf,
+      dist = (o) =>
+        Object.entries(o)
+          .map(([k, v]) => `${esc(k)} ${v}`)
+          .join(" · ") || "none";
+    const rows = ["low", "mid", "high"]
+      .filter((b) => p.fit?.[b]?.n)
+      .map(
+        (b) =>
+          `<tr><td>${b}</td><td>${p.fit[b].n}</td><td>${p.fit[b].wins}</td><td>${(
+            (p.fit[b].wins / p.fit[b].n) *
+            100
+          ).toFixed(0)}%</td><td>${money(p.fit[b].pnl)}</td></tr>`,
+      )
+      .join("");
+    html += `<details class="laya-perf" open><summary>Laya performance · ${p.analyses} labels · ${p.matched}/${p.trips} trips joined</summary><p class="note">regime — ${dist(p.regime)}</p><p class="note">quality — ${dist(p.quality)}</p>${rows ? `<table><thead><tr><th>entry fit</th><th>n</th><th>wins</th><th>win rate</th><th>P/L</th></tr></thead><tbody>${rows}</tbody></table>` : ""}<p class="note">Join uses the most recent analysis for the product before the entry; approximate.</p></details>`;
+  }
   if (r.proposals?.length)
     html += r.proposals
       .map((p) => {
         const gate = p.gate?.ok
-          ? "Applied"
+          ? `Applied (${esc(p.gate.tier ?? "")})`
           : esc((p.gate?.reasons ?? []).join("; ")) || "Not applied";
-        return `<div class="proposal ${p.applied ? "applied" : "rejected"}"><h4>${esc(p.target)} · ${p.applied ? "APPLIED" : "NOT APPLIED"}</h4><p>${esc(p.rationale)}</p>${p.proposed ? `<pre>${esc(String(p.proposed).slice(0, 400))}</pre>` : ""}<p class="gate">${gate}</p></div>`;
+        return `<div class="proposal ${p.applied ? "applied" : "rejected"}"><h4>${esc(p.target)} · ${p.applied ? "APPLIED" : "NOT APPLIED"}${p.gate?.tier ? ` · ${esc(p.gate.tier)}` : ""}</h4><p>${esc(p.rationale)}</p>${p.risk ? `<p class="note">risk: ${esc(p.risk)}</p>` : ""}${p.proposed ? `<details><summary>current → proposed (full text)</summary><p class="note">current</p><pre>${esc(String(p.current ?? "(none)"))}</pre><p class="note">proposed</p><pre>${esc(String(p.proposed))}</pre></details>` : ""}<p class="gate">${gate}</p></div>`;
       })
       .join("");
   else if (!r.error && !r.laya?.error)

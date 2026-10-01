@@ -134,3 +134,53 @@ test("with Laya enabled and working, analysis is attached and ranked", async () 
   assert.equal(engine.health.laya.ready, true);
   s.close();
 });
+
+// --- editable analysis questions (2.8.0) ---------------------------------
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  Laya,
+  defaultAnalysisQuestions,
+  resolveAnalysisQuestions,
+} from "../src/laya.mjs";
+
+test("analysis questions can be overridden while the heads stay fixed", () => {
+  const base = defaultAnalysisQuestions("breakout");
+  const merged = resolveAnalysisQuestions("breakout", {
+    fit: { instructions: "OVERRIDDEN FIT INSTRUCTION" },
+    regime: {
+      criteria: { uptrend: "up", range: "flat", downtrend: "down" },
+    },
+  });
+  assert.equal(merged.fit.instructions, "OVERRIDDEN FIT INSTRUCTION");
+  assert.deepEqual(merged.fit.criteria, base.fit.criteria);
+  assert.deepEqual(Object.keys(merged.regime.criteria), [
+    "uptrend",
+    "range",
+    "downtrend",
+  ]);
+  assert.equal(merged.quality.instructions, base.quality.instructions);
+});
+
+test("Laya reads an analysis-question override from the data directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-laya-"));
+  try {
+    const laya = new Laya("/tmp/does-not-matter.sock", 1000, dir);
+    assert.equal(laya.questionsOverride(), null, "no override yet");
+    mkdirSync(join(dir, "overrides"), { recursive: true });
+    writeFileSync(
+      join(dir, "overrides", "laya-analysis-questions.json"),
+      JSON.stringify({ fit: { instructions: "FROM FILE" } }),
+    );
+    assert.equal(laya.questionsOverride().fit.instructions, "FROM FILE");
+    // A corrupt override is ignored.
+    writeFileSync(
+      join(dir, "overrides", "laya-analysis-questions.json"),
+      "{oops",
+    );
+    assert.equal(laya.questionsOverride(), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
