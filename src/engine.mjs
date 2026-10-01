@@ -1,0 +1,1129 @@
+import { createHash, randomInt } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { IDS, ALL_BOTS, CONTROL_ID } from "./config.mjs";
+import {
+  dec,
+  str,
+  sub,
+  mul,
+  floorStep,
+  add,
+  availableAmount,
+} from "./decimal.mjs";
+import { eligibility, assertTradable } from "./market.mjs";
+import { executionPlan, VERSION } from "./strategy-v2.mjs";
+import { performance } from "./performance.mjs";
+import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
+
+// Backend build identifier, surfaced in api/state for the version-skew check.
+const BUILD = "2.7.0";
+
+// The control arm has no strategy rubric. Its only job on a held position is to
+// decide whether to keep or close it, using the same evidence the strategies see.
+const CONTROL_STRATEGY =
+  "This is the control arm. Positions were entered at random, not from any " +
+  "setup, so there is no thesis to defend. Judge only whether the evidence " +
+  "supports continuing to hold: SELL to close, HOLD to keep. Do not BUY. " +
+  "Laya's labels are uncalibrated evidence, not a decision or a probability. " +
+  "Code controls size, stops and execution; do not attempt to alter them.";
+
+// Simulated IOC fill at the touch, shaped like the exchange order object that
+// applyOrder consumes. A BUY `size` is quote (USDC); a SELL `size` is base.
+function paperFill(order, q, feeRate) {
+  const price = order.side === "BUY" ? Number(q.ask) : Number(q.bid);
+  if (!(price > 0)) throw Error("Invalid paper fill price");
+  const baseQty =
+    order.side === "BUY" ? Number(order.size) / price : Number(order.size);
+  const value = order.side === "BUY" ? Number(order.size) : baseQty * price;
+  const fmt = (n) => n.toFixed(12).replace(/0+$/, "").replace(/\.$/, "");
+  return {
+    order_id: "paper-" + order.id,
+    client_order_id: order.id,
+    product_id: order.product,
+    side: order.side,
+    status: "FILLED",
+    settled: true,
+    filled_size: fmt(baseQty),
+    filled_value: fmt(value),
+    total_fees: fmt(value * feeRate),
+  };
+}
+export class Engine {
+  constructor({
+    config,
+    store,
+    exchange,
+    market,
+    laya,
+    model,
+    settings = null,
+    review = null,
+  }) {
+    Object.assign(this, {
+      config,
+      store,
+      exchange,
+      market,
+      laya,
+      model,
+      settings,
+      reviewer: review,
+    });
+    this.stopped = false;
+    this.busy = false;
+    this.protectBusy = false;
+    this.lastCycle = 0;
+    this.lastProtection = 0;
+    this.health = { laya: null, account: null, error: null };
+    this.errors = new Map();
+    this.timers = [];
+    this.executing = Promise.resolve();
+    this.strategies = Object.fromEntries(
+      IDS.map((id) => [
+        id,
+        readFileSync(
+          new URL(`../strategies/${id}.md`, import.meta.url),
+          "utf8",
+        ),
+      ]),
+    );
+    this.legacyStrategies = { ...this.strategies };
+    if (config.strategyVersion === 2)
+      for (const id of IDS)
+        this.strategies[id] = readFileSync(
+          new URL(`../strategies/v2/${id}.md`, import.meta.url),
+          "utf8",
+        );
+    // Applied review changes live as overrides under the data directory, which
+    // is the only path the sandboxed service can write. They take precedence
+    // over the bundled rubric and feed the rule hash.
+    if (this.reviewer)
+      for (const id of IDS)
+        this.strategies[id] = this.reviewer.rubric(id, this.strategies[id]);
+    // Reads the live model name when a dashboard-managed selector is attached, so a
+    // provider/model switch is reflected in subsequent hashes.
+    this.rulesForHash = () =>
+      this.model.resolve?.()?.model ?? config.model.name;
+  }
+  // Every configured bot, strategy and control alike. Used by the protective
+  // loop and reporting, which are agnostic to how an entry was chosen.
+  botIds() {
+    return ALL_BOTS.filter((id) => this.config.bots?.[id]);
+  }
+  // The control arm enters at random and is never sent to the decision model for
+  // an entry. It still uses the model for discretionary exits, matching the live
+  // bots exactly so the only difference between arms is entry selection.
+  isControl(id) {
+    return id === CONTROL_ID;
+  }
+  isPaper(id) {
+    return this.config.bots?.[id]?.paper === true;
+  }
+  // The rule hash identifies which instructions produced a decision. It is stamped
+  // on every decision event, so it must follow the model that actually decided.
+  // A dashboard model switch would otherwise leave later decisions carrying the
+  // previous model's hash and misattribute them in the audit trail.
+  currentRuleHash() {
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          bots: this.config.bots,
+          strategies: this.strategies,
+          model: this.rulesForHash(),
+        }),
+      )
+      .digest("hex");
+  }
+  // Active model identity for the dashboard and audit records.
+  modelInfo() {
+    const resolved = this.model.resolve?.();
+    const provider = resolved?.provider ?? null;
+    const model = resolved?.model ?? this.config.model.name;
+    const spec = provider ? PROVIDERS[provider]?.models?.[model] : null;
+    return {
+      provider,
+      model,
+      label: provider ? modelLabel(provider, model) : String(model),
+      // The summary card wants a compact title; the settings panel wants the
+      // descriptive label including any price hint.
+      cardTitle: String(model).toUpperCase(),
+      free: spec?.free === true,
+      hasKey: !!resolved?.key,
+      keyEnv: resolved?.apiKeyEnv ?? this.config.model.apiKeyEnv ?? null,
+    };
+  }
+  async start() {
+    this.market.start?.();
+    // Explicit config arms live startup; mode remains visible. No exchange mutation in observe.
+    this.store.change(
+      (s) => {
+        if (this.config.mode !== "live") s.paused = true;
+        else if (s.lastMode !== "live") s.paused = false;
+        s.lastMode = this.config.mode;
+      },
+      "system",
+      {
+        message: "Runtime started",
+        mode: this.config.mode,
+        ruleHash: this.currentRuleHash(),
+      },
+    );
+    this.timers.push(
+      setInterval(() => void this.cycle(), this.config.marketIntervalMs),
+    );
+    this.timers.push(
+      setInterval(() => void this.protect(), this.config.protectionIntervalMs),
+    );
+    this.scheduleReview();
+    void this.cycle();
+    void this.protect();
+  }
+  // The Trade Review runs on the wall clock, at :00 each hour, over the hour
+  // that just closed. A plain interval would drift and split hours unevenly.
+  scheduleReview() {
+    if (!this.reviewer || this.config.review?.enabled === false) return;
+    const now = Date.now();
+    const next = Math.ceil(now / 3600000) * 3600000;
+    const first = setTimeout(
+      () => {
+        void this.review();
+        const iv = setInterval(() => void this.review(), 3600000);
+        iv.unref?.();
+        this.timers.push(iv);
+      },
+      Math.max(1000, next - now + 1500),
+    );
+    first.unref?.();
+    this.timers.push(first);
+  }
+  async review() {
+    if (this.reviewing || this.stopped) return;
+    this.reviewing = true;
+    try {
+      const until = Math.floor(Date.now() / 3600000) * 3600000;
+      const since = until - 3600000;
+      await this.reviewer.run({
+        since,
+        until,
+        coverage: this.market.coverage?.() ?? null,
+        autoApply: this.config.review?.autoApply !== false,
+      });
+      this.setError("review", null);
+    } catch (e) {
+      this.setError("review", e.message);
+      this.store.event("error", { component: "review", message: e.message });
+    } finally {
+      this.reviewing = false;
+    }
+  }
+  stop() {
+    this.stopped = true;
+    if (this.market.stop) this.market.closed = true;
+    for (const t of this.timers) clearInterval(t);
+  }
+  serial(fn) {
+    const p = this.executing.then(fn);
+    this.executing = p.catch(() => {});
+    return p;
+  }
+  async cycle() {
+    if (this.busy || this.stopped) return;
+    this.busy = true;
+    try {
+      this.market.held = Object.values(this.store.read().bots).flatMap((b) =>
+        (Array.isArray(b.positions) ? b.positions : []).map((p) => p.product),
+      );
+      await this.market.refresh();
+      if (this.stopped) return;
+      if (!this.lastMarketEvent || Date.now() - this.lastMarketEvent >= 60000) {
+        this.store.recordEquity(this.market.prices());
+        this.store.event("market", {
+          products: this.market.snapshot(),
+          error: this.market.lastError,
+        });
+        this.lastMarketEvent = Date.now();
+      }
+      if (Date.now() - this.lastCycle < this.config.decisionIntervalMs) return;
+      this.lastCycle = Date.now();
+      this.setError("analysis", null);
+      for (const id of IDS) {
+        try {
+          if (this.stopped) return;
+          if (this.store.pending().some((o) => o.bot === id)) {
+            this.store.event("status", {
+              bot: id,
+              message: "Waiting for order reconciliation",
+            });
+            continue;
+          }
+          const bot = this.store.read().bots[id],
+            rules = this.config.bots[id];
+          const positions = Array.isArray(bot.positions) ? bot.positions : [];
+          const heldProducts = positions.map((p) => p.product);
+          const maxPositions = this.store.maxPositions(id);
+          const atCapacity = positions.length >= maxPositions;
+          const v2 = this.config.strategyVersion === 2;
+          // A position written before the policy layer has no saved exit plan and
+          // is reviewed from the generic feature rows on the fast cadence.
+          const legacyPosition = v2 && positions.some((p) => !p.policy);
+          const available = v2 ? this.market.snapshot(id) : null;
+          const generic = v2 && legacyPosition ? this.market.snapshot() : [];
+          const reviewable = [...(available ?? []), ...generic];
+          if (v2) {
+            const interval = legacyPosition
+              ? 300000
+              : id === "breakout"
+                ? 300000
+                : id === "trend"
+                  ? 3600000
+                  : 900000;
+            const bucket = Math.floor(Date.now() / interval);
+            if (this.store.read().assessments?.[id] === bucket) continue;
+            // No cadence stamp while the universe or any held asset is warming.
+            if (
+              !available.length ||
+              heldProducts.some((p) => !reviewable.some((f) => f.product === p))
+            )
+              continue;
+            this.store.change((s) => {
+              s.assessments ??= {};
+              s.assessments[id] = bucket;
+            });
+          }
+          // Every held position stays in the candidate list so the model can
+          // review and exit it. New entries are drawn from the strategy universe
+          // and excluded while a bot is at its position limit.
+          let candidates;
+          if (v2) {
+            const held = [];
+            for (const p of positions) {
+              const row = reviewable.find((f) => f.product === p.product);
+              if (row) held.push({ ...row, held: true });
+            }
+            const fresh = atCapacity
+              ? []
+              : available
+                  .filter(
+                    (f) =>
+                      !heldProducts.includes(f.product) &&
+                      (id !== "breakout" ||
+                        ["meme", "speculative"].includes(f.category)),
+                  )
+                  .slice(0, 3);
+            candidates = [...held, ...fresh];
+          } else {
+            candidates = this.market
+              .snapshot()
+              .filter(
+                (f) =>
+                  heldProducts.includes(f.product) ||
+                  (f.periodTurnover >= rules.minPeriodTurnover &&
+                    f.turnover24h >= rules.min24hTurnover &&
+                    f.spreadBps <= rules.maxSpreadBps),
+              )
+              .map((f) => ({
+                ...f,
+                setupEligible: eligibility(id, f, rules),
+              }));
+          }
+          // Analyze liquid near-misses too: Laya remains visible even before an
+          // entry trigger. The execution layer still enforces the exact rules.
+          const rank = (f) =>
+            v2
+              ? (f.rankScore ?? 0)
+              : id === "breakout"
+                ? f.close / f.channelHigh
+                : id === "trend"
+                  ? f.ema20 / f.ema50
+                  : f.momentum7dPct;
+          candidates.sort(
+            (a, b) =>
+              Number(b.setupEligible) - Number(a.setupEligible) ||
+              rank(b) - rank(a),
+          );
+          // Held positions are never dropped from view; fresh entries were
+          // already capped at three above.
+          candidates = v2
+            ? candidates.slice(0, positions.length + 3)
+            : candidates.slice(0, 3);
+          if (v2) {
+            const fresh = [];
+            for (const f of candidates) {
+              try {
+                const q = await this.market.quote(f.product);
+                const item = { ...f, ...q };
+                fresh.push(item);
+              } catch (e) {
+                this.store.event("status", {
+                  bot: id,
+                  product: f.product,
+                  message: e.message,
+                });
+              }
+            }
+            candidates = fresh;
+          }
+          if (!candidates.length) {
+            const decision = {
+              action: positions.length ? "HOLD" : "SKIP",
+              reason: "No complete qualifying market snapshot",
+              source: "strategy rules",
+              at: Date.now(),
+            };
+            this.store.change(
+              (s) => {
+                s.bots[id].lastDecision = decision;
+              },
+              "decision",
+              { bot: id, ...decision },
+            );
+            this.setError(`analysis:${id}`, null);
+            continue;
+          }
+          // Laya is optional evidence. With it disabled, candidates go to the
+          // model on their metrics alone; a failed classification degrades that
+          // one candidate rather than aborting the bot.
+          const layaOn = this.config.layaEnabled !== false;
+          let analyzed = candidates;
+          if (layaOn) {
+            analyzed = [];
+            for (const f of candidates) {
+              if (this.stopped) return;
+              try {
+                const analysis = await this.laya.analyze(f, id);
+                this.health.laya = {
+                  ready: true,
+                  queueDepth: analysis.queue_depth,
+                  at: Date.now(),
+                };
+                this.store.event("analysis", {
+                  bot: id,
+                  product: f.product,
+                  sourceTime: f.at,
+                  ...analysis,
+                });
+                analyzed.push({ ...f, analysis });
+              } catch (e) {
+                this.store.event("status", {
+                  bot: id,
+                  product: f.product,
+                  message: e.message,
+                });
+                analyzed.push(f);
+              }
+            }
+            analyzed.sort(
+              (a, b) =>
+                (b.analysis?.answers?.fit?.score ?? 0) -
+                (a.analysis?.answers?.fit?.score ?? 0),
+            );
+          } else {
+            this.health.laya = { ready: false, disabled: true, at: Date.now() };
+          }
+          const day = new Date().toISOString().slice(0, 10);
+          if (v2) {
+            const usage = this.store.read().modelUsage;
+            if (
+              usage?.day === day &&
+              usage.calls >= (this.config.model.maxCallsPerDay ?? 1000)
+            )
+              throw Error("Daily decision-model call budget reached");
+            // Count the attempt before the call so a crash mid-request still
+            // consumes budget. Tokens and cost are recorded once it returns.
+            this.store.change((s) => {
+              if (s.modelUsage?.day !== day)
+                s.modelUsage = this.store.emptyUsage(day);
+              s.modelUsage.calls = Number(s.modelUsage.calls) || 0;
+              s.modelUsage.calls++;
+            });
+          }
+          const d = await this.model.decide({
+            strategy:
+              (legacyPosition
+                ? this.legacyStrategies[id]
+                : this.strategies[id]) +
+              "\nConfigured rules: " +
+              JSON.stringify(
+                legacyPosition ? positions.filter((p) => !p.policy) : rules,
+              ),
+            // The model needs the current holdings and the cap to decide whether
+            // a BUY is even possible, so it is told both explicitly.
+            bot: { ...bot, maxPositions },
+            candidates: analyzed,
+          });
+          // Usage accounting is telemetry. It must never be able to abort a
+          // decision or block an order, so a failure here is recorded and
+          // swallowed rather than thrown into the per-bot catch below.
+          if (v2)
+            try {
+              this.store.recordModelCall({
+                day,
+                provider: d.provider ?? null,
+                model: d.model,
+                usage: usageCounts(d.usage),
+                // null when the model has no published rate: tokens are still
+                // counted, but no cost is invented for it.
+                costNanos: costOf(d.usage, d.provider, d.model, Date.now()),
+              });
+            } catch (e) {
+              this.store.event("status", {
+                bot: id,
+                message: `Model usage not recorded: ${e.message}`,
+              });
+            }
+          const hash = this.currentRuleHash();
+          this.store.change(
+            (s) => {
+              s.bots[id].lastDecision = { ...d, at: Date.now() };
+            },
+            "decision",
+            { bot: id, ...d, ruleHash: hash },
+          );
+          this.setError(`analysis:${id}`, null);
+          if (this.stopped) return;
+          if (["BUY", "SELL"].includes(d.action)) {
+            const f = analyzed.find((f) => f.product === d.product);
+            if (Date.now() - f.at > this.config.maxAnalysisAgeMs) {
+              this.store.event("veto", {
+                bot: id,
+                reason: "Analysis expired before execution",
+              });
+              continue;
+            }
+            await this.serial(() => {
+              const live = this.store.read().bots[id];
+              const current = Array.isArray(live.positions)
+                ? live.positions.find((p) => p.product === d.product)
+                : null;
+              const snapshotPos = positions.find(
+                (p) => p.product === d.product,
+              );
+              if (
+                d.action === "SELL" &&
+                (!current ||
+                  current.opened !== snapshotPos?.opened ||
+                  current.quantity !== snapshotPos?.quantity)
+              ) {
+                this.store.event("veto", {
+                  bot: id,
+                  reason: "Position changed during agent assessment",
+                });
+                return;
+              }
+              return this.execute(id, d.action, d.product, d.reason, f);
+            });
+          }
+        } catch (e) {
+          this.setError(`analysis:${id}`, e.message);
+          this.store.event("error", {
+            bot: id,
+            component: "analysis",
+            message: e.message,
+          });
+        }
+      }
+      // The control arm runs after the strategies so it competes for the same
+      // market reads. It chooses entries at random and never consults the model
+      // for an entry; exits go through the identical model review.
+      if (this.config.bots?.[CONTROL_ID]) {
+        try {
+          await this.controlCycle();
+        } catch (e) {
+          this.setError(`analysis:${CONTROL_ID}`, e.message);
+          this.store.event("error", {
+            bot: CONTROL_ID,
+            component: "analysis",
+            message: e.message,
+          });
+        }
+      }
+    } catch (e) {
+      this.setError("analysis", e.message);
+      this.store.event("error", { component: "analysis", message: e.message });
+    } finally {
+      this.busy = false;
+    }
+  }
+  setError(scope, message) {
+    this.errors.delete(scope);
+    if (message) this.errors.set(scope, message);
+    this.health.error = [...this.errors.values()].at(-1) ?? null;
+  }
+  // One control cadence: review any held positions through the same Laya+model
+  // exit path the strategies use, then take at most one random entry while
+  // below the cap. The randomness is the point: it is the null hypothesis the
+  // strategy arms are measured against.
+  async controlCycle() {
+    const id = CONTROL_ID,
+      rules = this.config.bots[id];
+    if (this.store.pending().some((o) => o.bot === id)) return;
+    const interval =
+      Number(rules.intervalMs) >= 60000 ? rules.intervalMs : 900000;
+    const bucket = Math.floor(Date.now() / interval);
+    if (this.store.read().assessments?.[id] === bucket) return;
+    const available = this.market.snapshot();
+    if (!available.length) return;
+    this.store.change((s) => {
+      s.assessments ??= {};
+      s.assessments[id] = bucket;
+    });
+
+    // Discretionary exits first, through the identical model review.
+    const held = (this.store.read().bots[id].positions ?? []).slice();
+    if (held.length) await this.reviewControlExits(id, held, available);
+
+    // Then at most one random entry if there is room.
+    const live = this.store.read().bots[id];
+    const heldNow = (live.positions ?? []).map((p) => p.product);
+    if (heldNow.length >= this.store.maxPositions(id)) return;
+    const pool = available.filter((f) => !heldNow.includes(f.product));
+    if (!pool.length) return;
+    // Uniform over the union universe. Math.random is deliberate: any selection
+    // rule here would reintroduce the entry skill the control exists to remove.
+    const pick = pool[randomInt(pool.length)];
+    let q;
+    try {
+      q = await this.market.quote(pick.product);
+    } catch (e) {
+      this.store.event("status", {
+        bot: id,
+        product: pick.product,
+        message: e.message,
+      });
+      return;
+    }
+    const stopPrice = q.ask * (1 - Number(rules.stopPct) / 100);
+    const evidence = {
+      product: pick.product,
+      at: Date.now(),
+      atr: Number.isFinite(pick.atr) ? pick.atr : null,
+      stopPrice,
+      signalTime: pick.signalTime ?? Date.now(),
+      control: true,
+      reason: "Control arm: uniformly random entry",
+    };
+    await this.serial(() =>
+      this.execute(id, "BUY", pick.product, evidence.reason, evidence),
+    );
+  }
+  // Held control positions are reviewed by the model exactly as strategy
+  // positions are: Laya classifies the evidence, the model decides SELL/HOLD.
+  async reviewControlExits(id, held, available) {
+    const rules = this.config.bots[id];
+    const candidates = [];
+    for (const p of held) {
+      const row = available.find((f) => f.product === p.product);
+      if (!row) continue;
+      try {
+        candidates.push({
+          ...row,
+          ...(await this.market.quote(p.product)),
+          held: true,
+        });
+      } catch (e) {
+        this.store.event("status", {
+          bot: id,
+          product: p.product,
+          message: e.message,
+        });
+      }
+    }
+    if (!candidates.length) return;
+    // Same Laya policy as the strategy loop: optional, and a failure degrades
+    // the candidate rather than dropping it.
+    let analyzed = candidates;
+    if (this.config.layaEnabled !== false) {
+      analyzed = [];
+      for (const f of candidates) {
+        try {
+          const analysis = await this.laya.analyze(f, id);
+          this.store.event("analysis", {
+            bot: id,
+            product: f.product,
+            sourceTime: f.at,
+            ...analysis,
+          });
+          analyzed.push({ ...f, analysis });
+        } catch (e) {
+          this.store.event("status", {
+            bot: id,
+            product: f.product,
+            message: e.message,
+          });
+          analyzed.push(f);
+        }
+      }
+    }
+    if (!analyzed.length) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const bot = this.store.read().bots[id];
+    const d = await this.model.decide({
+      strategy: CONTROL_STRATEGY,
+      bot: { ...bot, maxPositions: this.store.maxPositions(id) },
+      candidates: analyzed,
+    });
+    try {
+      this.store.recordModelCall({
+        day,
+        provider: d.provider ?? null,
+        model: d.model,
+        usage: usageCounts(d.usage),
+        costNanos: costOf(d.usage, d.provider, d.model, Date.now()),
+      });
+    } catch (e) {
+      this.store.event("status", {
+        bot: id,
+        message: `Model usage not recorded: ${e.message}`,
+      });
+    }
+    this.store.change(
+      (s) => {
+        s.bots[id].lastDecision = { ...d, at: Date.now() };
+      },
+      "decision",
+      { bot: id, ...d, ruleHash: this.currentRuleHash() },
+    );
+    if (d.action !== "SELL") return;
+    const f = analyzed.find((x) => x.product === d.product);
+    if (!f) return;
+    await this.serial(() => this.execute(id, "SELL", d.product, d.reason, f));
+  }
+  async accounts() {
+    const r = await this.exchange.accounts();
+    const balances = {};
+    for (const a of r.accounts ?? []) {
+      if (!a.currency || a.available_balance?.currency !== a.currency)
+        throw Error("Invalid account currency");
+      const amount = availableAmount(a.available_balance.value);
+      if (dec(amount) < 0n) throw Error("Invalid account balance");
+      balances[a.currency] = add(balances[a.currency] ?? "0", amount);
+    }
+    return balances;
+  }
+  async reconcileBalances() {
+    const balances = await this.accounts(),
+      s = this.store.read();
+    // Open exchange orders reserve funds there; compare cash only once they are settled.
+    if (this.store.pending().length) return balances;
+    let cash = "0";
+    const owned = {};
+    for (const b of Object.values(s.bots)) {
+      // A paper arm's simulated cash is not on the exchange, so including it
+      // would demand real funds the account does not hold.
+      if (this.isPaper(b.id)) continue;
+      cash = add(cash, b.cash);
+      for (const p of Array.isArray(b.positions) ? b.positions : []) {
+        const coin = p.product.split("-")[0];
+        owned[coin] = add(owned[coin] ?? "0", p.quantity);
+      }
+    }
+    if (dec(balances.USDC ?? "0") < dec(cash))
+      throw Error("Exchange USDC is below combined bot cash allocation");
+    for (const [coin, qty] of Object.entries(owned))
+      if (dec(balances[coin] ?? "0") < dec(qty))
+        throw Error("Exchange holdings are below bot-owned quantity");
+    this.health.account = { ok: true, at: Date.now() };
+    return balances;
+  }
+  async execute(id, side, product, reason, evidence = null) {
+    if (this.stopped) return;
+    if (this.config.mode !== "live") {
+      this.store.event("veto", {
+        bot: id,
+        reason: "Observe mode: no real orders",
+        intendedAction: side,
+        product,
+      });
+      return;
+    }
+    const rules = this.config.bots[id],
+      state = this.store.read(),
+      bot = state.bots[id];
+    const paper = this.isPaper(id);
+    if (this.store.pending().some((o) => o.bot === id)) return;
+    if (side === "BUY" && (state.paused || state.halt)) return;
+    const p = await this.exchange.product(product);
+    assertTradable(p, product);
+    const q = await this.market.quote(product);
+    // Account/capital discrepancies block new exposure, not a valid protective
+    // sale. A paper arm holds no real funds, so it is exempt: its own ledger
+    // reserves are the only limit that applies to it.
+    const balances = paper
+      ? null
+      : side === "BUY"
+        ? await this.reconcileBalances()
+        : await this.accounts();
+    let size,
+      reserve = "0",
+      policy = null,
+      takerFee = null;
+    if (side === "BUY") {
+      if (
+        !evidence ||
+        Date.now() - evidence.at > this.config.maxAnalysisAgeMs ||
+        // The control arm has no setup to qualify; its randomness is the point.
+        (!evidence.control && !eligibility(id, { ...evidence, ...q }, rules))
+      )
+        throw Error("Entry no longer qualifies");
+      // Re-check capacity and duplicates against live state: another cycle may
+      // have filled a slot while this decision was being assessed.
+      const held = Array.isArray(bot.positions) ? bot.positions : [];
+      if (held.length >= this.store.maxPositions(id))
+        throw Error("Position limit reached while decision was pending");
+      if (held.some((x) => x.product === product))
+        throw Error("Bot already holds this pair");
+      const fee = await this.exchange.fees();
+      const feeRate = String(fee.fee_tier?.taker_fee_rate ?? "");
+      takerFee = feeRate;
+      if (!(Number(feeRate) >= 0 && Number(feeRate) < 0.1))
+        throw Error("Actual fee rate unavailable");
+      const budget = mul(
+        sub(bot.cash, bot.reserved),
+        String(rules.tradeFraction),
+      );
+      // Fee reserve includes a 0.1% buffer; no confidence-based sizing.
+      const divisor = dec(add("1.001", feeRate));
+      size = floorStep(
+        str((dec(budget) * dec("1")) / divisor),
+        p.quote_increment,
+      );
+      if (evidence.strategyVersion || evidence.control) {
+        policy = executionPlan(
+          evidence,
+          q,
+          Number(sub(bot.cash, bot.reserved)),
+          Number(feeRate),
+          rules,
+        );
+        size = floorStep(policy.quote.toFixed(18), p.quote_increment);
+        // The control has no strategy exit plan: its stops are the pct stops in
+        // config, so the sizing plan is used but the policy is not attached.
+        if (!evidence.strategyVersion) policy = null;
+      }
+      reserve = add(size, mul(size, add(feeRate, "0.001")));
+      const totalReserved = Object.values(state.bots)
+        .filter((b2) => !this.isPaper(b2.id))
+        .reduce((n, b2) => n + dec(b2.reserved), 0n);
+      if (!paper && dec(reserve) > dec(balances.USDC ?? "0") - totalReserved)
+        throw Error("Insufficient unreserved exchange cash");
+      if (
+        dec(size) < dec(p.quote_min_size) ||
+        Number(size) / q.ask < Number(p.base_min_size)
+      )
+        throw Error("Below product minimum");
+      if (p.quote_max_size && dec(size) > dec(p.quote_max_size))
+        throw Error("Above product maximum");
+    } else {
+      const held = Array.isArray(bot.positions)
+        ? bot.positions.find((x) => x.product === product)
+        : null;
+      if (!held) throw Error("Position changed while decision was pending");
+      size = floorStep(held.quantity, p.base_increment);
+      if (
+        dec(size) < dec(p.base_min_size) ||
+        Number(size) * q.bid < Number(p.quote_min_size)
+      )
+        throw Error(
+          "Residual holding below exchange minimum; needs owner review",
+        );
+      if (dec(size) > dec(balances?.[product.split("-")[0]] ?? "0") && !paper)
+        throw Error("Insufficient exchange asset balance");
+    }
+    if (this.stopped) return;
+    // Recheck freshness after private API reads and immediately before reserving/submitting.
+    if (
+      side === "BUY" &&
+      Date.now() - evidence.at > this.config.maxAnalysisAgeMs
+    )
+      throw Error("Entry evidence expired");
+    const freshQuote = await this.market.quote(product);
+    if (
+      side === "BUY" &&
+      !evidence.control &&
+      !eligibility(id, { ...evidence, ...freshQuote }, rules)
+    )
+      throw Error("Entry changed during validation");
+    if (side === "BUY" && policy) {
+      const checked = executionPlan(
+        evidence,
+        freshQuote,
+        Number(sub(bot.cash, bot.reserved)),
+        Number(takerFee),
+        rules,
+      );
+      const bounded = floorStep(checked.quote.toFixed(18), p.quote_increment);
+      if (dec(bounded) < dec(size)) size = bounded;
+      reserve = add(size, mul(size, add(takerFee, "0.001")));
+      if (
+        dec(size) < dec(p.quote_min_size) ||
+        Number(size) / freshQuote.ask < Number(p.base_min_size)
+      )
+        throw Error("Risk-sized order below product minimum");
+      policy = checked;
+    }
+    const order = this.store.reserve({
+      bot: id,
+      product,
+      side,
+      size,
+      reserve,
+      reason,
+      ...rules,
+      policy: policy
+        ? { ...policy, bot: id, trailAtr: rules.trailAtr, trailR: rules.trailR }
+        : null,
+    });
+    try {
+      // A paper arm never touches the exchange. Its fill is simulated at the
+      // touch with the real taker fee and booked through the same ledger path a
+      // real fill uses, so positions, P&L and protective exits behave
+      // identically. Switching the arm to real funds is `paper: false`.
+      if (paper) {
+        const fee = await this.exchange.fees();
+        const rate = Number(fee.fee_tier?.taker_fee_rate ?? 0);
+        if (!(rate >= 0 && rate < 0.1))
+          throw Error("Actual fee rate unavailable");
+        this.store.acknowledge(order.id, "paper-" + order.id);
+        this.store.applyOrder(order.id, paperFill(order, q, rate));
+        return;
+      }
+      const r = await this.exchange.create({
+        client_order_id: order.id,
+        product_id: product,
+        side,
+        size,
+      });
+      if (r.success === false) {
+        this.store.reject(order.id);
+        return;
+      }
+      const exchangeId = r.success_response?.order_id;
+      if (!exchangeId) throw Error("No exchange order acknowledgement");
+      this.store.acknowledge(order.id, exchangeId);
+    } catch {
+      this.store.unknown(order.id);
+    }
+  }
+  async reconcileOrders() {
+    for (const o of this.store.pending()) {
+      try {
+        let exchangeId = o.exchangeId;
+        if (!exchangeId) {
+          const r = await this.exchange.find(o.id, o.created);
+          if (!r.order) continue; // Never repeat a submission just because a search is empty.
+          exchangeId = r.order.order_id;
+          this.store.acknowledge(o.id, exchangeId);
+        }
+        const r = await this.exchange.order(exchangeId);
+        const x = r.order;
+        const previous = this.store.read().orders[o.id];
+        if (
+          x &&
+          (String(x.filled_size ?? "0") !== previous.filled ||
+            String(x.filled_value ?? "0") !== previous.value ||
+            String(x.total_fees ?? "0") !== previous.fees ||
+            x.status !== previous.exchangeStatus ||
+            x.settled === true)
+        )
+          this.store.applyOrder(o.id, x);
+        this.setError(`reconciliation:${o.id}`, null);
+      } catch (e) {
+        this.setError(`reconciliation:${o.id}`, e.message);
+        this.store.event("error", {
+          bot: o.bot,
+          clientId: o.id,
+          component: "reconciliation",
+          message: e.message,
+        });
+      }
+    }
+  }
+  async protect() {
+    if (this.protectBusy || this.stopped) return;
+    this.protectBusy = true;
+    try {
+      await this.serial(async () => {
+        await this.reconcileOrders();
+        for (const id of this.botIds()) {
+          try {
+            const b = this.store.read().bots[id];
+            const positions = Array.isArray(b.positions) ? b.positions : [];
+            if (!positions.length) {
+              this.setError(`protection:${id}`, null);
+              continue;
+            }
+            // One order in flight per bot: an unresolved exit blocks the rest
+            // until it reconciles, so positions are worked off sequentially.
+            if (this.store.pending().some((o) => o.bot === id)) continue;
+            for (const p of positions) {
+              const q = await this.market.quote(p.product),
+                entry = Number(p.cost) / Number(p.quantity);
+              if (p.policy) {
+                const result = this.strategyExit(id, p, q);
+                if (result) {
+                  await this.execute(id, "SELL", p.product, result);
+                  break;
+                }
+                continue;
+              }
+              const peak = Math.max(Number(p.peak), q.bid, entry);
+              this.store.change((s) => {
+                const live = Array.isArray(s.bots[id].positions)
+                  ? s.bots[id].positions
+                  : [];
+                const t = live.find(
+                  (x) => x.product === p.product && x.opened === p.opened,
+                );
+                if (t) t.peak = String(peak);
+              });
+              const hard = q.bid <= entry * (1 - p.stopPct / 100);
+              const trailing =
+                peak >= entry * (1 + p.trailActivationPct / 100) &&
+                q.bid <= peak * (1 - p.trailPct / 100);
+              const expired =
+                p.maxHoldHours > 0 &&
+                Date.now() - p.opened > p.maxHoldHours * 3600000;
+              if (hard || trailing || expired) {
+                await this.execute(
+                  id,
+                  "SELL",
+                  p.product,
+                  hard
+                    ? "Protective stop"
+                    : trailing
+                      ? "Trailing exit"
+                      : "Maximum holding time",
+                );
+                break;
+              }
+            }
+            this.setError(`protection:${id}`, null);
+          } catch (e) {
+            this.setError(`protection:${id}`, e.message);
+            this.store.event("error", {
+              bot: id,
+              component: "protection",
+              message: e.message,
+            });
+          }
+        }
+        this.lastProtection = Date.now();
+      });
+      this.setError("execution", null);
+    } catch (e) {
+      this.setError("execution", e.message);
+      this.store.event("error", { component: "execution", message: e.message });
+    } finally {
+      this.protectBusy = false;
+    }
+  }
+  strategyExit(id, p, q) {
+    const policy = { ...p.policy };
+    if (q.bid <= policy.stopPrice) return "Strategy protective stop";
+    const f = this.market.snapshot(id).find((x) => x.product === p.product);
+    if (!f) return null; // Existing price stop survives missing indicator data.
+    const entry = Number(p.cost) / Number(p.quantity);
+    if (f.signalTime !== policy.lastBar) {
+      policy.lastBar = f.signalTime;
+      policy.peakClose = Math.max(policy.peakClose ?? entry, f.close);
+      if (policy.peakClose - entry >= policy.trailR * policy.initialRisk)
+        policy.stopPrice = Math.max(
+          policy.stopPrice,
+          policy.peakClose - policy.trailAtr * f.atr,
+        );
+      if (id === "momentum" && f.rankTime !== policy.lastRankTime) {
+        policy.lastRankTime = f.rankTime;
+        policy.weakRanks =
+          f.rankPercentile < 0.5 ? (policy.weakRanks ?? 0) + 1 : 0;
+      }
+      this.store.change((s) => {
+        const live = Array.isArray(s.bots[id].positions)
+          ? s.bots[id].positions
+          : [];
+        const t = live.find(
+          (x) => x.product === p.product && x.opened === p.opened,
+        );
+        if (t) t.policy = policy;
+      });
+    }
+    if (q.bid <= policy.stopPrice) return "Strategy trailing stop";
+    if (id === "breakout") {
+      if (f.close < policy.breakoutLevel) return "Breakout failed";
+      if (
+        f.signalTime - policy.signalTime >= 12 * 300000 &&
+        policy.peakClose - entry < policy.initialRisk
+      )
+        return "Breakout follow-through expired";
+    }
+    if (id === "trend" && f.contextClose < f.ema50)
+      return "Four-hour trend invalidated";
+    if (
+      id === "momentum" &&
+      ((policy.weakRanks ?? 0) >= 2 ||
+        (f.momentum24hPct <= 0 && f.hourClose < f.ema20))
+    )
+      return "Relative momentum deteriorated";
+    return null;
+  }
+  snapshot() {
+    const s = this.store.read();
+    const results = performance(s.orders);
+    return {
+      mode: this.config.mode,
+      // Identifies the backend build. public/ is re-read per request while src/
+      // is cached at import, so a frontend-only deploy leaves the browser and
+      // the API on different versions. The dashboard compares this against the
+      // version it was shipped with and reports the mismatch.
+      build: BUILD,
+      review: s.lastReview ?? null,
+      paused: s.paused,
+      halt: s.halt,
+      ruleHash: this.currentRuleHash(),
+      bots: this.store.value(this.market.prices()).map((b) => ({
+        ...b,
+        performance: results.stats[b.id] || {
+          wins: 0,
+          losses: 0,
+          breakeven: 0,
+          unknown: 0,
+        },
+      })),
+      orders: Object.values(s.orders)
+        .slice(-100)
+        .map((o) => ({ ...o, realisedPnl: results.sales[o.id] ?? null })),
+      health: this.health,
+      market: this.market.snapshot(),
+      coverage: this.market.coverage?.() ?? null,
+      strategyVersion: this.config.strategyVersion ?? 1,
+      modelUsage: (() => {
+        const u = this.store.normaliseUsage(s.modelUsage ?? null);
+        if (!u) return null;
+        // costNanos is a decimal string in storage; it never leaves as a BigInt,
+        // which JSON cannot represent.
+        const cost = (n) => (/^\d+$/.test(String(n ?? "")) ? String(n) : "0");
+        return {
+          ...u,
+          costNanos: cost(u.costNanos),
+          perModel: Object.fromEntries(
+            Object.entries(u.perModel ?? {}).map(([k, p]) => [
+              k,
+              { ...p, costNanos: cost(p.costNanos) },
+            ]),
+          ),
+        };
+      })(),
+      model: this.modelInfo(),
+      modelConfig: this.settings?.redacted?.() ?? null,
+      latestAnalyses: this.store.db
+        .prepare(
+          "SELECT id,ts,body FROM events WHERE kind='analysis' ORDER BY id DESC LIMIT 30",
+        )
+        .all()
+        .map((r) => ({ id: r.id, ts: r.ts, ...JSON.parse(r.body) })),
+      lastProtection: this.lastProtection,
+      lastCycle: this.lastCycle,
+      history: this.store.history(),
+      rules: this.config.bots,
+    };
+  }
+}

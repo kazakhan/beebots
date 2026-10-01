@@ -1,0 +1,88 @@
+{
+  "mode": "observe",
+  "liveAcknowledgement": "",
+  "bind": "127.0.0.1",
+  "port": 8788,
+  "basePath": "/beebots/",
+  "publicOrigin": "https://example.com",
+  "dataDir": "/var/lib/beebots",
+  "layaSocket": "/run/laya/laya.sock",
+  "layaTimeoutMs": 30000,
+  "coinbasePython": "/opt/coinbase/venv/bin/python",
+  "coinbaseKeyFile": "",
+  "coinbasePortfolioId": "",
+  "decisionIntervalMs": 300000,
+  "marketIntervalMs": 60000,
+  "protectionIntervalMs": 5000,
+  "maxAnalysisAgeMs": 120000,
+  "modelTimeoutMs": 45000,
+  "products": ["BTC-USDC", "ETH-USDC", "SOL-USDC"],
+  "model": {
+    "baseUrl": "https://REPLACE-WITH-PROVIDER/v1",
+    "name": "REPLACE-WITH-MODEL",
+    "apiKeyEnv": "BEEBOTS_MODEL_KEY",
+    "allowNoKey": false
+  },
+  "auth": {
+    "username": "admin",
+    "passwordHash": "REPLACE-USING-npm-run-password"
+  },
+  "bots": {
+    "breakout": {
+      "name": "Scout",
+      "capital": "0",
+      "tradeFraction": 0.9,
+      "stopPct": 3,
+      "trailActivationPct": 4,
+      "trailPct": 2,
+      "maxHoldHours": 24,
+      "maxSpreadBps": 30,
+      "minPeriodTurnover": 100000,
+      "min24hTurnover": 2000000,
+      "maxPositions": 3
+    },
+    "trend": {
+      "name": "Keeper",
+      "capital": "0",
+      "tradeFraction": 0.9,
+      "stopPct": 4,
+      "trailActivationPct": 6,
+      "trailPct": 3,
+      "maxHoldHours": 0,
+      "maxSpreadBps": 30,
+      "minPeriodTurnover": 100000,
+      "min24hTurnover": 2000000,
+      "maxPositions": 3
+    },
+    "momentum": {
+      "name": "Spark",
+      "capital": "0",
+      "tradeFraction": 0.9,
+      "stopPct": 3,
+      "trailActivationPct": 4,
+      "trailPct": 2,
+      "maxHoldHours": 48,
+      "maxSpreadBps": 30,
+      "minPeriodTurnover": 100000,
+      "min24hTurnover": 2000000,
+      "maxPositions": 3
+    },
+    "control": {
+      "name": "Dice",
+      "capital": "0",
+      "paper": true,
+      "maxPositions": 3,
+      "tradeFraction": 0.9,
+      "stopPct": 3,
+      "trailActivationPct": 4,
+      "trailPct": 2,
+      "maxHoldHours": 24,
+      "riskPct": 1,
+      "maxCostRisk": 0.4,
+      "intervalMs": 900000
+    }
+  },
+  "coinbaseApiKeyName": "",
+  "coinbaseApiKeySecret": "",
+  "layaEnabled": true
+}

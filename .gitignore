@@ -1,0 +1,17 @@
+# Runtime secrets and state — never commit these.
+config.json
+config.local.json
+.env
+model.json
+laya-questions.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+runtime.lock
+
+# Local backups and generated output.
+_backups/
+test-results/
+playwright-report/
+node_modules/
+.npm-cache/

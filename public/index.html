@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BeeBots · Coinbase</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="./"
+        ><span class="hive">🐝</span> beebots<span class="brand-suffix"
+          >.coinbase</span
+        >
+        <small>PRIVATE HIVE</small></a
+      >
+      <div class="connection">
+        <span id="connection">CONNECTING</span><span id="mode">—</span
+        ><button id="pause" disabled>Pause entries</button
+        ><button
+          id="model-gear"
+          class="gear"
+          title="Decision model"
+          aria-label="Decision model"
+          aria-haspopup="dialog"
+        >
+          ⚙
+        </button>
+      </div>
+    </header>
+    <main>
+      <section class="summary-strip" aria-label="Hive summary">
+        <div>
+          <span>COMBINED EQUITY</span><strong id="total">—</strong
+          ><small>USDC · excludes the paper control</small>
+        </div>
+        <div>
+          <span>REALISED P/L</span><strong id="summary-pnl">—</strong
+          ><small>Closed positions · net of fees</small>
+        </div>
+        <div>
+          <span>FEES PAID</span><strong id="summary-fees">—</strong
+          ><small>Coinbase execution fees</small>
+        </div>
+        <div>
+          <span>ORDERS WITH FILLS</span><strong id="summary-fills">—</strong
+          ><small>Across strategy bots</small>
+        </div>
+        <div>
+          <span id="summary-model">DECISION MODEL CALLS</span
+          ><strong id="summary-calls">—</strong
+          ><small id="summary-cost" title="Estimated provider cost today, USD"
+            >—</small
+          ><small id="status">Waiting for authenticated feed</small>
+        </div>
+      </section>
+      <div id="alert" role="status" hidden></div>
+      <section id="bots" class="bots" aria-label="Trading bots"></section>
+      <section class="panels" aria-label="Activity">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Order ledger</h2>
+            <span>EXCHANGE CONFIRMED</span>
+          </div>
+          <div id="orders" class="orders"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Decision stream</h2>
+            <select id="filter" aria-label="Filter activity">
+              <option value="all">All events</option>
+              <option value="analysis">Laya</option>
+              <option value="decision">Decisions</option>
+              <option value="review">Trade review</option>
+              <option value="orders">Orders & fills</option>
+            </select>
+          </div>
+          <div id="events" class="events" aria-live="polite"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Laya analysis</h2>
+            <span>LIVE CLASSIFICATION</span>
+          </div>
+          <p class="note">
+            Scores are uncalibrated model outputs, not probabilities of profit.
+          </p>
+          <div id="analysis" class="analysis">
+            <p class="muted">Waiting for the next analysis…</p>
+          </div>
+        </article>
+      </section>
+      <div class="operations">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Leaderboard</h2>
+            <span>NET OF FEES</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Rank / bot</th>
+                <th>Return</th>
+                <th>Equity</th>
+                <th>Drawdown</th>
+                <th>Fills*</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboard"></tbody>
+          </table>
+          <p class="note">
+            Returns use each bot’s allocated capital. *Orders with fills.
+            Unpriced holdings are excluded from ranking.
+          </p>
+          <div
+            id="chart"
+            hidden
+            class="chart"
+            aria-label="Portfolio equity history"
+          ></div>
+        </article>
+        <section
+          id="coverage"
+          class="panel"
+          hidden
+          aria-label="Market coverage"
+        ></section>
+        <section id="review" class="panel" aria-label="Trade review">
+          <div class="panel-head">
+            <h2>Trade Review</h2>
+            <span id="review-when">HOURLY · :00</span>
+          </div>
+          <div id="review-body" class="review-body">
+            <p class="muted">Waiting for the first hourly review…</p>
+          </div>
+        </section>
+      </div>
+      <footer>
+        Independent spot portfolios · Protective exits remain active while
+        entries are paused.<span id="updated"></span>
+      </footer>
+    </main>
+    <!-- Decision-model settings. Kept out of the page flow entirely: this was a
+         panel inside the operations grid in 2.1.0 and it broke that layout. -->
+    <dialog
+      id="model-dialog"
+      class="model-dialog"
+      aria-labelledby="model-dialog-title"
+    >
+      <form method="dialog" class="dialog-head">
+        <h2 id="model-dialog-title">Decision model</h2>
+        <button class="dialog-close" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="settings-body">
+        <p class="note" id="settings-current">—</p>
+        <p class="note">
+          Switching provider changes which model makes future entry decisions.
+          Protective exits are pure code and are unaffected. Pause entries
+          first, then watch a few cycles before resuming.
+        </p>
+        <label>Provider<select id="settings-provider"></select></label>
+        <label id="settings-endpoint-row" hidden
+          >Endpoint<input
+            id="settings-endpoint"
+            type="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="http://127.0.0.1:11434/v1"
+        /></label>
+        <label>Model<select id="settings-model-select"></select></label>
+        <label id="settings-key-row"
+          >API key<input
+            id="settings-key"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Leave blank to keep the stored key"
+        /></label>
+        <p class="note" id="settings-key-state">—</p>
+        <div class="settings-actions">
+          <button id="settings-save" type="button">Save selection</button>
+          <button id="settings-test" type="button">Test connection</button>
+          <button id="settings-refresh" type="button">Refresh models</button>
+        </div>
+        <p class="note" id="settings-result"></p>
+        <details>
+          <summary>Today by model</summary>
+          <div id="settings-usage"></div>
+        </details>
+      </div>
+    </dialog>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

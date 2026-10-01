@@ -1,0 +1,31 @@
+[Unit]
+Description=BeeBots Coinbase trading agents and dashboard
+After=network-online.target laya-serve.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beebots
+Group=beebots
+SupplementaryGroups=laya
+WorkingDirectory=/var/www/example.com/beebots
+# Replace with an absolute Node 24+ executable accessible by this service user.
+# A root-managed runtime is preferred to a path beneath /home/beebots.
+ExecStart=/usr/bin/node /var/www/example.com/beebots/src/main.mjs
+Environment=BEEBOTS_CONFIG=/etc/beebots/config.json
+EnvironmentFile=/etc/beebots/model.env
+StateDirectory=beebots
+StateDirectoryMode=0750
+UMask=0027
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/beebots
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

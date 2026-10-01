@@ -1,0 +1,16 @@
+{
+  "reviewed": "2026-09-27",
+  "source": "https://www.coindesk.com/nl/index/cdmeme/constituents",
+  "note": "Identity-matched seed; Coinbase descriptions extend coverage. Owner overrides can add sourced speculative categories. Unclassified assets remain visible for review.",
+  "assets": {
+    "DOGE": { "category": "meme", "names": ["Dogecoin"] },
+    "SHIB": { "category": "meme", "names": ["Shiba Inu"] },
+    "PEPE": { "category": "meme", "names": ["Pepe"] },
+    "BONK": { "category": "meme", "names": ["Bonk"] },
+    "WIF": {
+      "category": "meme",
+      "names": ["dogwifhat"],
+      "source": "https://www.coinbase.com/en-fr/price/dogwifhat"
+    }
+  }
+}
