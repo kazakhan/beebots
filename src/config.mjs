@@ -104,6 +104,11 @@ export function validate(c) {
       typeof c.review.autoApply !== "boolean"
     )
       throw Error("Invalid review.autoApply");
+    if (
+      c.review.requireControl !== undefined &&
+      typeof c.review.requireControl !== "boolean"
+    )
+      throw Error("Invalid review.requireControl");
   }
   if (/\/(var\/www|htdocs|public_html)(\/|$)/.test(c.dataDir))
     throw Error("Data must be outside web root");

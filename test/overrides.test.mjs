@@ -1,0 +1,76 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  validateParams,
+  validateOverride,
+  targetAllowed,
+  PARAM_SCHEMA,
+} from "../src/overrides.mjs";
+
+test("the numeric registry covers each bot and the runtime", () => {
+  for (const t of [
+    "params.breakout",
+    "params.trend",
+    "params.momentum",
+    "params.control",
+    "runtime",
+  ])
+    assert.ok(targetAllowed(t), `${t} must be a target`);
+});
+
+test("a numeric override inside its bounds is accepted", () => {
+  assert.equal(
+    validateParams("params.breakout", {
+      rangeAtr: 8,
+      relativeVolume: 1.5,
+      maxExtensionAtr: 3,
+      cadenceMs: 300000,
+      maxCandidates: 25,
+      timeframe: "15m",
+      categories: ["meme", "speculative"],
+    }),
+    null,
+  );
+  assert.equal(validateParams("runtime", { cadenceMs: 60000 }), null);
+});
+
+test("an out-of-bounds or unknown numeric key is refused", () => {
+  assert.match(
+    validateParams("params.trend", { riskPct: 99 }),
+    /riskPct must be between/,
+  );
+  assert.match(
+    validateParams("params.trend", { maxCandidates: 1.5 }),
+    /must be an integer/,
+  );
+  assert.match(
+    validateParams("params.trend", { timeframe: "2m" }),
+    /timeframe must be one of/,
+  );
+  // Capital, mode and leverage are not tunable: unknown keys are refused.
+  assert.match(
+    validateParams("params.trend", { capital: 1000 }),
+    /not a tunable/,
+  );
+  assert.match(validateParams("runtime", { mode: "live" }), /not a tunable/);
+});
+
+test("validateOverride routes numeric targets through the schema", () => {
+  assert.equal(
+    validateOverride("params.momentum", JSON.stringify({ minBreadth: 5 })),
+    null,
+  );
+  assert.match(
+    validateOverride("params.momentum", JSON.stringify({ minBreadth: 0 })),
+    /minBreadth must be between/,
+  );
+  assert.match(
+    validateOverride("params.momentum", "{not json"),
+    /must be valid JSON/,
+  );
+});
+
+test("the schema bounds are sane", () => {
+  for (const [k, r] of Object.entries(PARAM_SCHEMA))
+    if (r.min !== undefined) assert.ok(r.min <= r.max, `${k} min<=max`);
+});

@@ -14,9 +14,85 @@ export const OVERRIDES = {
   "rubric.breakout": "breakout.md",
   "rubric.trend": "trend.md",
   "rubric.momentum": "momentum.md",
+  "params.breakout": "params-breakout.json",
+  "params.trend": "params-trend.json",
+  "params.momentum": "params-momentum.json",
+  "params.control": "params-control.json",
+  runtime: "runtime.json",
 };
 
 export const ALLOWED_TARGETS = Object.keys(OVERRIDES);
+
+// Numeric tuning the self-improvement loop may write. Each key has a hard bound:
+// the model proposes, but it can never leave this envelope. Capital, mode,
+// leverage, maxPositions and turning stops off are deliberately absent - they
+// are not tunable.
+export const PARAM_SCHEMA = {
+  rangeBars: { min: 5, max: 200, int: true },
+  rangeAtr: { min: 0.5, max: 20 },
+  relativeVolume: { min: 0.5, max: 10 },
+  maxExtensionAtr: { min: 0, max: 10 },
+  pullbackBars: { min: 1, max: 20, int: true },
+  topFraction: { min: 0.05, max: 1 },
+  minBreadth: { min: 1, max: 100, int: true },
+  riskPct: { min: 0.1, max: 3 },
+  maxCostRisk: { min: 0.05, max: 0.6 },
+  trailAtr: { min: 0.5, max: 10 },
+  trailR: { min: 0.5, max: 10 },
+  tradeFraction: { min: 0.05, max: 0.95 },
+  stopPct: { min: 0.5, max: 15 },
+  trailPct: { min: 0.5, max: 15 },
+  trailActivationPct: { min: 0.5, max: 30 },
+  maxHoldHours: { min: 0, max: 168, int: true },
+  cadenceMs: { min: 30000, max: 3600000, int: true },
+  maxCandidates: { min: 1, max: 50, int: true },
+  timeframe: { enum: ["5m", "15m", "1h"] },
+  categories: { list: ["meme", "speculative", "unclassified"] },
+};
+
+export const RUNTIME_SCHEMA = {
+  cadenceMs: { min: 30000, max: 3600000, int: true },
+  maxCandidates: { min: 1, max: 50, int: true },
+  modelMaxCallsPerDay: { min: 1, max: 100000, int: true },
+  scoutCategories: { list: ["meme", "speculative", "unclassified"] },
+};
+
+export const PARAM_KEYS = Object.keys(PARAM_SCHEMA);
+export const RUNTIME_KEYS = Object.keys(RUNTIME_SCHEMA);
+
+function boundError(key, value, rule) {
+  if (rule.enum)
+    return rule.enum.includes(value)
+      ? null
+      : `${key} must be one of ${rule.enum.join(", ")}`;
+  if (rule.list) {
+    if (!Array.isArray(value) || !value.length)
+      return `${key} must be a non-empty list`;
+    const bad = value.filter((v) => !rule.list.includes(v));
+    return bad.length ? `${key} has unknown entries: ${bad.join(", ")}` : null;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) return `${key} must be a number`;
+  if (rule.int && !Number.isInteger(n)) return `${key} must be an integer`;
+  if (n < rule.min || n > rule.max)
+    return `${key} must be between ${rule.min} and ${rule.max}`;
+  return null;
+}
+
+// Validate a numeric params/runtime object against its schema. Unknown keys are
+// refused so the model cannot smuggle in capital, mode, leverage or anything
+// else that is not explicitly tunable.
+export function validateParams(target, value) {
+  const schema = target === "runtime" ? RUNTIME_SCHEMA : PARAM_SCHEMA;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return "A numeric override must be a JSON object";
+  for (const key of Object.keys(value)) {
+    if (!Object.hasOwn(schema, key)) return `${key} is not a tunable parameter`;
+    const e = boundError(key, value[key], schema[key]);
+    if (e) return e;
+  }
+  return null;
+}
 
 export function targetAllowed(target) {
   return Object.hasOwn(OVERRIDES, target);
@@ -56,6 +132,16 @@ export function readJsonOverride(dataDir, target, fallback) {
 export function validateOverride(target, text, { invariantsHold } = {}) {
   if (!targetAllowed(target)) return "Target is out of scope";
   if (typeof text !== "string" || !text.trim()) return "Proposed text is empty";
+  // Numeric overrides: a full JSON object validated against the hard bounds.
+  if (target === "runtime" || target.startsWith("params.")) {
+    let d;
+    try {
+      d = JSON.parse(text);
+    } catch {
+      return "A numeric override must be valid JSON";
+    }
+    return validateParams(target, d);
+  }
   if (target.startsWith("rubric.")) {
     if (!/^\s*#/.test(text))
       return "A rubric must be a full document with a heading";

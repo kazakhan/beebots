@@ -7,6 +7,9 @@ import { discover } from "./universe.mjs";
 import { evaluate, rankMomentum, aggregate } from "./strategy-v2.mjs";
 import { fromTrades } from "./repair-candles.mjs";
 
+// A product first discovered within this many days is considered new.
+const NEW_DAYS = 30;
+
 export class UniverseMarket extends Market {
   constructor(exchange, config) {
     super(exchange, []);
@@ -46,6 +49,14 @@ export class UniverseMarket extends Market {
       this.categoryAt = saved.at;
       this.categoryStatus = saved.status;
     }
+    // When each product was first seen. Coinbase exposes no listing date, so
+    // "new" is measured from first discovery. Used to prioritise new coins.
+    const listed = this.load("firstSeen");
+    this.firstSeen = new Map(listed ? Object.entries(listed) : []);
+  }
+  isNew(product) {
+    const t = this.firstSeen?.get(product);
+    return Number.isFinite(t) && Date.now() - t < NEW_DAYS * 86400000;
   }
   load(k) {
     const r = this.cache.prepare("SELECT body FROM cache WHERE key=?").get(k);
@@ -125,6 +136,11 @@ export class UniverseMarket extends Market {
           this.categories,
         );
         this.entries = new Map(this.catalogue.map((x) => [x.product, x]));
+        const now = Date.now();
+        for (const x of this.catalogue)
+          if (!this.firstSeen.has(x.product))
+            this.firstSeen.set(x.product, now);
+        this.save("firstSeen", Object.fromEntries(this.firstSeen));
         this.products = this.catalogue
           .filter((x) => x.eligible)
           .map((x) => x.product);
@@ -190,7 +206,10 @@ export class UniverseMarket extends Market {
     if (
       old.length >= count &&
       Number(old.at(-1).start) + seconds === end &&
-      old.every((row, i) => !i || Number(row.start) - Number(old[i - 1].start) === seconds)
+      old.every(
+        (row, i) =>
+          !i || Number(row.start) - Number(old[i - 1].start) === seconds,
+      )
     )
       return closedCandles(old, seconds);
     const start =
@@ -300,6 +319,7 @@ export class UniverseMarket extends Market {
           ...f,
           product,
           at: Date.now(),
+          isNew: this.isNew(product),
           membership: entry.membership,
           dataQuality: {
             repairedTradeBuckets: frames.five.filter(

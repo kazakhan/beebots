@@ -18,6 +18,13 @@ export const defaults = {
     maxCostRisk: 0.4,
     trailAtr: 2,
     trailR: 2,
+    // Defaults are the starting point; the Trade Review tunes them (bounded by
+    // the override schema). Scout scans every tradeable market, meme and new
+    // listings ranked first.
+    timeframe: "5m",
+    cadenceMs: 300000,
+    maxCandidates: 25,
+    categories: ["meme", "speculative", "unclassified"],
   },
   trend: {
     pullbackBars: 5,
@@ -26,6 +33,10 @@ export const defaults = {
     maxCostRisk: 0.2,
     trailAtr: 3,
     trailR: 2,
+    // Keeper is a day trader: a 15-minute signal on the 4-hour trend context.
+    timeframe: "15m",
+    cadenceMs: 300000,
+    maxCandidates: 25,
   },
   momentum: {
     topFraction: 0.2,
@@ -34,6 +45,9 @@ export const defaults = {
     maxCostRisk: 0.2,
     trailAtr: 2.5,
     trailR: 2,
+    timeframe: "15m",
+    cadenceMs: 300000,
+    maxCandidates: 25,
   },
 };
 export function ema(xs, n) {
@@ -89,7 +103,10 @@ export function evaluate(id, frames, rules, membership) {
     c = frames.five,
     h = frames.hour,
     ctx = frames.four;
-  const bars = id === "breakout" ? c : id === "trend" ? h : aggregate(c, 900);
+  // The signal timeframe is tunable (5m / 15m / 1h). The bar period the style
+  // reads from is what the Trade Review tunes so a bot can day-trade.
+  const bars =
+    r.timeframe === "5m" ? c : r.timeframe === "1h" ? h : aggregate(c, 900);
   if (!bars?.length) throw Error("Signal history missing");
   const last = bars.at(-1),
     prior = bars.slice(0, -1),
@@ -110,12 +127,8 @@ export function evaluate(id, frames, rules, membership) {
     if (!condition) f.reasons.push(reason);
   };
   if (id === "breakout") {
-    if (c.length < 200)
-      throw Error("Scout requires 200 completed 5-minute bars");
-    fail(
-      ["meme", "speculative"].includes(membership.category),
-      "Not in Scout speculative universe",
-    );
+    if (bars.length < 200)
+      throw Error("Scout requires 200 completed signal bars");
     const range = prior.slice(-r.rangeBars),
       a = atr(prior),
       vols = range.map((x) => x.volume);
@@ -145,7 +158,7 @@ export function evaluate(id, frames, rules, membership) {
     f.maxEntry = f.channelHigh + r.maxExtensionAtr * a;
     f.rankScore = close / f.channelHigh;
   } else if (id === "trend") {
-    if (ctx.length < 250 || h.length < 60)
+    if (ctx.length < 250 || bars.length < 60)
       throw Error("Keeper context history warming");
     const prices = ctx.map((x) => x.close),
       hp = prior.map((x) => x.close),

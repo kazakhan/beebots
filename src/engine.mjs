@@ -12,8 +12,13 @@ import {
   SCALE,
 } from "./decimal.mjs";
 import { eligibility, assertTradable } from "./market.mjs";
-import { executionPlan, VERSION } from "./strategy-v2.mjs";
+import {
+  executionPlan,
+  VERSION,
+  defaults as STRATEGY_DEFAULTS,
+} from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
+import { readJsonOverride, validateParams } from "./overrides.mjs";
 import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
 import {
@@ -26,7 +31,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.0.4";
+const BUILD = "3.1.0";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -149,6 +154,14 @@ export class Engine {
   isPaper(id) {
     return this.config.bots?.[id]?.paper === true;
   }
+  effectiveRulesMap() {
+    return Object.fromEntries(
+      ALL_BOTS.filter((id) => this.config.bots?.[id]).map((id) => [
+        id,
+        this.effectiveRules(id),
+      ]),
+    );
+  }
   // The rule hash identifies which instructions produced a decision. It is stamped
   // on every decision event, so it must follow the model that actually decided.
   // A dashboard model switch would otherwise leave later decisions carrying the
@@ -157,12 +170,38 @@ export class Engine {
     return createHash("sha256")
       .update(
         JSON.stringify({
-          bots: this.config.bots,
+          bots: this.effectiveRulesMap(),
           strategies: this.strategies,
           model: this.rulesForHash(),
         }),
       )
       .digest("hex");
+  }
+  // The strategy parameters a bot actually runs on: bundled defaults, then the
+  // owner's config, then whatever the self-improvement loop last applied. The
+  // override is schema-validated before use, so a corrupt or out-of-bounds file
+  // is ignored rather than trusted.
+  effectiveRules(id) {
+    const base = {
+      ...(STRATEGY_DEFAULTS[id] ?? {}),
+      ...(this.config.bots?.[id] ?? {}),
+    };
+    const over = readJsonOverride(this.config.dataDir, `params.${id}`, null);
+    if (over && !validateParams(`params.${id}`, over))
+      Object.assign(base, over);
+    return base;
+  }
+  // Runtime-wide knobs the review may tune. Defaults are the pre-review values.
+  effectiveRuntime() {
+    const base = {
+      cadenceMs: 300000,
+      maxCandidates: 25,
+      modelMaxCallsPerDay: this.config.model?.maxCallsPerDay ?? 1000,
+      scoutCategories: ["meme", "speculative", "unclassified"],
+    };
+    const over = readJsonOverride(this.config.dataDir, "runtime", null);
+    if (over && !validateParams("runtime", over)) Object.assign(base, over);
+    return base;
   }
   // The selected decision engine. Dashboard settings win; absent that, the
   // owner's config.engine; absent that, the behaviour of the pre-2.9 runtime
@@ -373,6 +412,7 @@ export class Engine {
       if (Date.now() - this.lastCycle < this.config.decisionIntervalMs) return;
       this.lastCycle = Date.now();
       this.setError("analysis", null);
+      const runtime = this.effectiveRuntime();
       for (const id of IDS) {
         try {
           if (this.stopped) return;
@@ -384,7 +424,7 @@ export class Engine {
             continue;
           }
           const bot = this.store.read().bots[id],
-            rules = this.config.bots[id];
+            rules = this.effectiveRules(id);
           const positions = Array.isArray(bot.positions) ? bot.positions : [];
           const heldProducts = positions.map((p) => p.product);
           const maxPositions = this.store.maxPositions(id);
@@ -400,13 +440,10 @@ export class Engine {
           const generic = v2 ? this.market.snapshot() : [];
           const reviewable = [...(available ?? []), ...generic];
           if (v2) {
-            const interval = legacyPosition
-              ? 300000
-              : id === "breakout"
-                ? 300000
-                : id === "trend"
-                  ? 3600000
-                  : 900000;
+            // Cadence is tunable and defaults to 5 minutes for every bot; the
+            // old fixed 5m/15m/1h buckets are gone, so Keeper can day-trade.
+            const cadence = Number(rules.cadenceMs);
+            const interval = cadence >= 30000 ? cadence : runtime.cadenceMs;
             const bucket = Math.floor(Date.now() / interval);
             if (this.store.read().assessments?.[id] === bucket) continue;
             // No cadence stamp while the universe or any held asset is warming.
@@ -430,16 +467,22 @@ export class Engine {
               const row = reviewable.find((f) => f.product === p.product);
               if (row) held.push({ ...row, held: true });
             }
+            const cap = Math.max(
+              1,
+              Number(rules.maxCandidates) || runtime.maxCandidates,
+            );
+            const cats = Array.isArray(rules.categories)
+              ? rules.categories
+              : runtime.scoutCategories;
             const fresh = atCapacity
               ? []
               : available
                   .filter(
                     (f) =>
                       !heldProducts.includes(f.product) &&
-                      (id !== "breakout" ||
-                        ["meme", "speculative"].includes(f.category)),
+                      (id !== "breakout" || cats.includes(f.category)),
                   )
-                  .slice(0, 3);
+                  .slice(0, cap);
             candidates = [...held, ...fresh];
           } else {
             candidates = this.market
@@ -466,16 +509,24 @@ export class Engine {
                 : id === "trend"
                   ? f.ema20 / f.ema50
                   : f.momentum7dPct;
+          // Scout's priority is meme and newly listed coins, then setup quality.
+          const priority = (f) =>
+            id === "breakout" && (f.category === "meme" || f.isNew) ? 1 : 0;
           candidates.sort(
             (a, b) =>
               Number(b.setupEligible) - Number(a.setupEligible) ||
+              priority(b) - priority(a) ||
               rank(b) - rank(a),
           );
           // Held positions are never dropped from view; fresh entries were
-          // already capped at three above.
+          // already capped above.
+          const maxCandidates = Math.max(
+            1,
+            Number(rules.maxCandidates) || runtime.maxCandidates,
+          );
           candidates = v2
-            ? candidates.slice(0, positions.length + 3)
-            : candidates.slice(0, 3);
+            ? candidates.slice(0, positions.length + maxCandidates)
+            : candidates.slice(0, maxCandidates);
           if (v2) {
             const fresh = [];
             for (const f of candidates) {
@@ -562,7 +613,10 @@ export class Engine {
               const usage = this.store.read().modelUsage;
               if (
                 usage?.day === day &&
-                usage.calls >= (this.config.model.maxCallsPerDay ?? 1000)
+                usage.calls >=
+                  (runtime.modelMaxCallsPerDay ??
+                    this.config.model.maxCallsPerDay ??
+                    1000)
               )
                 throw Error("Daily decision-model call budget reached");
               // Count the attempt before the call so a crash mid-request still
@@ -795,10 +849,12 @@ export class Engine {
   // strategy arms are measured against.
   async controlCycle() {
     const id = CONTROL_ID,
-      rules = this.config.bots[id];
+      rules = this.effectiveRules(id);
     if (this.store.pending().some((o) => o.bot === id)) return;
     const interval =
-      Number(rules.intervalMs) >= 60000 ? rules.intervalMs : 900000;
+      Number(rules.cadenceMs) >= 30000
+        ? rules.cadenceMs
+        : this.effectiveRuntime().cadenceMs;
     const bucket = Math.floor(Date.now() / interval);
     if (this.store.read().assessments?.[id] === bucket) return;
     const available = this.market.snapshot();
@@ -849,7 +905,7 @@ export class Engine {
   // Held control positions are reviewed by the model exactly as strategy
   // positions are: Laya classifies the evidence, the model decides SELL/HOLD.
   async reviewControlExits(id, held, available) {
-    const rules = this.config.bots[id];
+    const rules = this.effectiveRules(id);
     const candidates = [];
     for (const p of held) {
       const row = available.find((f) => f.product === p.product);
@@ -976,7 +1032,7 @@ export class Engine {
       });
       return;
     }
-    const rules = this.config.bots[id],
+    const rules = this.effectiveRules(id),
       state = this.store.read(),
       bot = state.bots[id];
     const paper = this.isPaper(id);
@@ -1378,7 +1434,7 @@ export class Engine {
       lastProtection: this.lastProtection,
       lastCycle: this.lastCycle,
       history: this.store.history(),
-      rules: this.config.bots,
+      rules: this.effectiveRulesMap(),
     };
   }
 }

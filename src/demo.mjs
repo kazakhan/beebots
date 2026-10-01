@@ -15,9 +15,50 @@ const config = {
       salt + ":" + scryptSync("local-preview-only", salt, 64).toString("hex"),
   },
   bots: {
-    breakout: { name: "Scout", capital: "100", maxPositions: 3, paper: true },
-    trend: { name: "Keeper", capital: "100", maxPositions: 3, paper: true },
-    momentum: { name: "Spark", capital: "100", maxPositions: 3, paper: true },
+    breakout: {
+      name: "Scout",
+      capital: "100",
+      maxPositions: 3,
+      paper: true,
+      riskPct: 1,
+      tradeFraction: 0.9,
+      maxCostRisk: 0.4,
+      timeframe: "5m",
+      cadenceMs: 300000,
+      maxCandidates: 25,
+      rangeAtr: 8,
+      relativeVolume: 1.5,
+      maxExtensionAtr: 3,
+      categories: ["meme", "speculative", "unclassified"],
+    },
+    trend: {
+      name: "Keeper",
+      capital: "100",
+      maxPositions: 3,
+      paper: true,
+      riskPct: 1,
+      tradeFraction: 0.9,
+      maxCostRisk: 0.2,
+      timeframe: "15m",
+      cadenceMs: 300000,
+      maxCandidates: 25,
+      pullbackBars: 3,
+      maxExtensionAtr: 1,
+    },
+    momentum: {
+      name: "Spark",
+      capital: "100",
+      maxPositions: 3,
+      paper: true,
+      riskPct: 1,
+      tradeFraction: 0.9,
+      maxCostRisk: 0.2,
+      timeframe: "15m",
+      cadenceMs: 300000,
+      maxCandidates: 25,
+      topFraction: 0.35,
+      minBreadth: 5,
+    },
     control: { name: "Dice", capital: "100", maxPositions: 3, paper: true },
   },
 };
@@ -59,7 +100,7 @@ const engine = {
     strategyVersion: 2,
     // Matches the backend build the page expects, so the version-skew check does
     // not fire against the synthetic preview.
-    build: "3.0.4",
+    build: "3.1.0",
     // Synthetic free-model fixture: proves the cost line and provider-driven
     // labels render without any provider connection.
     modelUsage: {

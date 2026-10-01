@@ -379,7 +379,7 @@ test("aggregation never invents incomplete 15 minute bars", () => {
   rows.splice(1, 1);
   assert.equal(aggregate(rows, 900).length, 1);
 });
-test("Scout uses a prior range, requires membership and rejects chasing", () => {
+test("Scout uses a prior range and rejects chasing (any category)", () => {
   const five = Array.from({ length: 210 }, (_, i) => ({
     ...bar(i),
     high: 100 + (i < 110 ? 1 : 0.2),
@@ -410,14 +410,14 @@ test("Scout uses a prior range, requires membership and rejects chasing", () => 
     }),
     false,
   );
+  // Scout scans every tradeable category; membership is no longer a veto.
   const other = evaluate(
     "breakout",
     { five },
     {},
     { category: "unclassified" },
   );
-  assert.equal(other.setupEligible, false);
-  assert.ok(other.reasons.includes("Not in Scout speculative universe"));
+  assert.ok(!other.reasons.includes("Not in Scout speculative universe"));
 });
 test("momentum ranks common-hour full comparison data and enforces breadth", () => {
   const rows = Array.from({ length: 10 }, (_, i) => ({

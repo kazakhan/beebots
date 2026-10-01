@@ -175,6 +175,41 @@ export function createServer({
         );
         return json(200, { paused: data.paused });
       }
+      if (
+        path === config.basePath + "api/halt/clear" &&
+        req.method === "POST"
+      ) {
+        if (!(await control(req)))
+          return json(403, { error: "Invalid control origin" });
+        store.change(
+          (s) => {
+            s.halt = null;
+          },
+          "control",
+          { message: "Halt cleared by owner" },
+        );
+        return json(200, { halt: null });
+      }
+      if (
+        path === config.basePath + "api/review/revert" &&
+        req.method === "POST"
+      ) {
+        if (!(await control(req)))
+          return json(403, { error: "Invalid control origin" });
+        const body = await jsonBody(req);
+        if (body.error) return json(body.status ?? 400, { error: body.error });
+        const target = body.data?.target;
+        if (typeof target !== "string" || !target)
+          return json(400, { error: "target required" });
+        if (!engine.reviewer)
+          return json(409, { error: "No review is running" });
+        try {
+          engine.reviewer.revert(target);
+        } catch (e) {
+          return json(400, { error: e.message });
+        }
+        return json(200, { reverted: target });
+      }
       if (path === config.basePath + "api/settings" && req.method === "GET") {
         // Read-only. Returns the catalogue and a masked key hint, never a key.
         return json(200, { ...offer(), engine: engine.modelInfo?.() ?? null });

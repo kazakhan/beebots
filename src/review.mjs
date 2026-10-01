@@ -1,13 +1,13 @@
-// Trade Review — hourly self-assessment of both the bots and Laya.
+// Trade Review — hourly self-assessment of the bots and Laya.
 //
 // Laya reads the previous hour as text and answers a set of classified heads;
-// the decision model turns those answers into bounded proposals that may change
-// a bot's written rubric or Laya's own question sets. Proposals are applied only
-// when the evidence gate allows it, and applied changes live as overrides under
-// the data directory (the service cannot write to the web root).
-//
-// Targets are prose only. Everything numeric - stops, sizing, riskPct,
-// maxPositions, capital, mode - is out of scope by construction.
+// the decision model turns those answers into proposals that change a bot's
+// rubric, Laya's question sets, OR the numeric strategy parameters (gates,
+// cadence, candidate cap, timeframe, universe). The objective is to beat the
+// control arm (Dice): more wins, fewer losses. Proposals are applied
+// automatically within hard numeric bounds, and a change that later
+// underperforms Dice is auto-reverted. Everything applied lives as an override
+// under the data directory.
 import {
   existsSync,
   writeFileSync,
@@ -20,6 +20,7 @@ import {
 import { join } from "node:path";
 import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
+import { defaults as STRATEGY_DEFAULTS } from "./strategy-v2.mjs";
 import {
   ALLOWED_TARGETS,
   targetAllowed,
@@ -27,14 +28,18 @@ import {
   readOverride,
   readJsonOverride,
   validateOverride,
+  validateParams,
+  PARAM_KEYS,
+  PARAM_SCHEMA,
+  RUNTIME_KEYS,
+  RUNTIME_SCHEMA,
 } from "./overrides.mjs";
 
 export { ALLOWED_TARGETS, targetAllowed };
 
-// Minimum closed round-trips before an EDGE change (a bot rubric or Laya's
-// trading questions) may be applied. Structural changes - the review's own
-// questions - are exempt because they cannot affect trading.
-export const MIN_SAMPLE = 10;
+// Minimum closed round-trips before an EDGE change may be applied. Lowered for a
+// faster self-improvement loop; the review runs hourly.
+export const MIN_SAMPLE = 5;
 // Relative expectancy improvement required over the control arm.
 export const MIN_MARGIN = 0.1;
 // Hours a proposal must hold in shadow before promotion.
@@ -256,6 +261,30 @@ function perfLines(p) {
   return out;
 }
 
+// Per-arm realised P&L and win/loss, with each strategy bot's gap to Dice. This
+// is the objective the review tunes against.
+export function scoreboardLines(orders) {
+  const trips = closedRoundTrips(orders);
+  const bots = [...STRATEGY_ARMS, CONTROL_ARM];
+  const row = (bot) => {
+    const list = trips[bot] ?? [];
+    const pnl = list.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+    const wins = list.filter((t) => t.pnl > 0n).length;
+    return { bot, n: list.length, wins, loss: list.length - wins, pnl };
+  };
+  const rows = bots.map(row);
+  const dice = rows.find((r) => r.bot === CONTROL_ARM) ?? { pnl: 0 };
+  const out = ["SCOREBOARD (realised P&L, all-time)"];
+  for (const r of rows)
+    out.push(
+      `- ${r.bot}: ${r.n} trades ${r.wins}W/${r.loss}L pnl=${r.pnl.toFixed(2)}` +
+        (r.bot === CONTROL_ARM
+          ? " (Dice, the baseline to beat)"
+          : ` (vs Dice ${(r.pnl - dice.pnl >= 0 ? "+" : "") + (r.pnl - dice.pnl).toFixed(2)})`),
+    );
+  return out;
+}
+
 // Build the hour as text for Laya. Bounded: the daemon's context is finite and
 // the state is truncated server-side anyway.
 export function buildHourState({ events, orders, coverage, since, until }) {
@@ -298,29 +327,34 @@ export function buildHourState({ events, orders, coverage, since, until }) {
         `- ${o.bot} ${o.side} ${o.product} filled=${o.filled} value=${o.value} fees=${o.fees} reason=${String(o.reason ?? "").slice(0, 200)}`,
       );
   lines.push(...perfLines(layaPerformance({ events, orders, since })));
+  lines.push(...scoreboardLines(orders));
   return lines.join("\n");
 }
 
 const REVIEW_SYSTEM =
-  "You review one hour of an automated spot-trading system and propose " +
-  "improvements to EITHER the bots' written rubrics OR Laya's own question " +
-  "sets. Two jobs: (1) judge the bots against the hour's decisions and " +
-  "outcomes; (2) judge Laya itself - do its classifications track outcomes, " +
-  "and is it being asked the right questions? You are given the decisions, " +
-  "Laya's classifications and a Laya performance table, the eligible setups, " +
-  "the fills, Laya's answers, and the CURRENT full text of every editable " +
-  "target. Propose AT MOST 3 changes. Each proposal's `proposed` field MUST be " +
-  "the COMPLETE replacement document - the full rubric text (with its heading) " +
-  "or the full question-set JSON - not a description or a diff; `current` must " +
-  "be the exact current text you are replacing. A rubric must retain its safety " +
-  "clauses: no shorts, Laya is uncalibrated evidence not a decision or " +
-  "probability, code controls size and execution, do not alter stops, do not " +
-  "force trades. You must never propose changes to numeric risk parameters, " +
-  "stop levels, position sizing, capital, mode, or code. If nothing is worth " +
+  "You improve an automated spot-trading system with three strategy bots and a " +
+  "random control arm named Dice. Your objective: make each bot BEAT Dice - " +
+  "more wins, fewer losses, higher realised P&L. You may change ANY editable " +
+  "target: a bot's written rubric, Laya's question sets, and the numeric " +
+  "strategy parameters (entry gates, risk, cadence, candidate cap, signal " +
+  "timeframe, Scout's universe categories) and the runtime knobs. Two jobs: " +
+  "(1) judge the bots against the hour's decisions, outcomes and the per-arm " +
+  "scoreboard versus Dice; (2) judge Laya itself - do its classifications track " +
+  "outcomes, and is it being asked the right questions? You are given the " +
+  "decisions, Laya's classifications and performance, the eligible setups, the " +
+  "fills, the per-arm scoreboard, the allowed numeric ranges, and the CURRENT " +
+  "value of every editable target. Propose AT MOST 3 changes. Each proposal's " +
+  "`proposed` field MUST be the COMPLETE replacement - the full rubric text " +
+  "(with heading), the full question-set JSON, or the full numeric JSON - the " +
+  "exact shape of `current`; `current` must be the exact value you are " +
+  "replacing. Numeric values must stay within the allowed ranges; anything " +
+  "outside is refused. Rubrics must retain their safety clauses: no shorts, " +
+  "Laya is uncalibrated evidence not a decision or probability, code controls " +
+  "size and execution, do not alter stops, do not force trades. Capital, mode, " +
+  "leverage and disabling stops are never changeable. If nothing is worth " +
   "changing, return an empty proposals list. Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
-  '"proposals":[{"target":"laya.reviewQuestions|laya.analysisQuestions|rubric.breakout|rubric.trend|rubric.momentum",' +
-  '"current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
+  '"proposals":[{"target":"...","current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
 export class TradeReview {
   constructor({ store, laya, model, config, dataDir }) {
@@ -341,7 +375,40 @@ export class TradeReview {
   rubric(id, fallback) {
     return readOverride(this.dataDir, `rubric.${id}`) ?? fallback;
   }
-  // The current text of every editable target, for the model to rewrite.
+  // The numeric parameters a bot actually runs on: defaults -> config -> review.
+  effectiveParams(id) {
+    const base = {
+      ...(STRATEGY_DEFAULTS[id] ?? {}),
+      ...(this.config.bots?.[id] ?? {}),
+    };
+    const over = readJsonOverride(this.dataDir, `params.${id}`, null);
+    if (over && !validateParams(`params.${id}`, over))
+      Object.assign(base, over);
+    return base;
+  }
+  effectiveRuntime() {
+    const base = {
+      cadenceMs: 300000,
+      maxCandidates: 25,
+      modelMaxCallsPerDay: this.config.model?.maxCallsPerDay ?? 1000,
+      scoutCategories: ["meme", "speculative", "unclassified"],
+    };
+    const over = readJsonOverride(this.dataDir, "runtime", null);
+    if (over && !validateParams("runtime", over)) Object.assign(base, over);
+    return base;
+  }
+  // Only the tunable keys, so the model sees the shape it may rewrite.
+  paramView(id) {
+    const eff = this.effectiveParams(id);
+    return Object.fromEntries(
+      PARAM_KEYS.filter((k) => eff[k] !== undefined).map((k) => [k, eff[k]]),
+    );
+  }
+  runtimeView() {
+    const eff = this.effectiveRuntime();
+    return Object.fromEntries(RUNTIME_KEYS.map((k) => [k, eff[k]]));
+  }
+  // The current value of every editable target, for the model to rewrite.
   currentTargets() {
     const out = {
       "laya.reviewQuestions": JSON.stringify(this.reviewQuestions(), null, 1),
@@ -350,7 +417,29 @@ export class TradeReview {
       const t = readOverride(this.dataDir, `rubric.${id}`);
       if (t) out[`rubric.${id}`] = t;
     }
+    for (const id of [...STRATEGY_ARMS, CONTROL_ARM])
+      out[`params.${id}`] = JSON.stringify(this.paramView(id), null, 1);
+    out.runtime = JSON.stringify(this.runtimeView(), null, 1);
     return out;
+  }
+  // The allowed numeric ranges, so the model proposes in-bounds values.
+  schemaText() {
+    const fmt = (schema) =>
+      Object.entries(schema)
+        .map(([k, r]) =>
+          r.enum
+            ? `${k}: one of ${r.enum.join("|")}`
+            : r.list
+              ? `${k}: any of ${r.list.join("|")}`
+              : `${k}: ${r.min}..${r.max}${r.int ? " (int)" : ""}`,
+        )
+        .join("; ");
+    return (
+      "ALLOWED NUMERIC RANGES\nparams.<bot>: " +
+      fmt(PARAM_SCHEMA) +
+      "\nruntime: " +
+      fmt(RUNTIME_SCHEMA)
+    );
   }
   // One hourly pass: gather the hour, let Laya classify it, let the model propose
   // changes, gate each proposal, and apply only what the evidence supports.
@@ -359,6 +448,9 @@ export class TradeReview {
       .recent(2000)
       .filter((e) => e.ts >= since && e.ts < until);
     const s = this.store.read();
+    // Close the loop first: any earlier change that is now losing to Dice is
+    // reverted before we consider new proposals.
+    this.revertLosers(s.orders, until);
     const perf = layaPerformance({
       events: this.store.recent(5000),
       orders: s.orders,
@@ -391,7 +483,9 @@ export class TradeReview {
         "\n\nLAYA ANSWERS\n" +
         JSON.stringify(laya.answers, null, 1) +
         "\n\nCURRENT TARGETS\n" +
-        JSON.stringify(targets, null, 1);
+        JSON.stringify(targets, null, 1) +
+        "\n\n" +
+        this.schemaText();
       try {
         const r = await this.model.review(REVIEW_SYSTEM, user);
         summary = typeof r.data?.summary === "string" ? r.data.summary : null;
@@ -422,12 +516,14 @@ export class TradeReview {
         proposal: p,
         sample,
         minSample: this.config?.review?.minSample,
+        requireControl: this.config?.review?.requireControl,
       });
       let applied = false;
       if (gate.ok && autoApply) {
         try {
           this.apply(p);
           applied = true;
+          this.recordChange(p);
         } catch (e) {
           gate.reasons.push(e.message);
         }
@@ -511,6 +607,73 @@ export class TradeReview {
     });
     return true;
   }
+  // Remember an applied change so its effect can be measured against Dice and
+  // reverted if it underperforms. Only arm-scoped targets are tracked.
+  recordChange(proposal) {
+    const arm =
+      proposal.target.startsWith("params.") ||
+      proposal.target.startsWith("rubric.")
+        ? proposal.target.split(".")[1]
+        : null;
+    if (!arm) return;
+    this.store.change(
+      (st) => {
+        st.appliedChanges ??= [];
+        st.appliedChanges.push({
+          target: proposal.target,
+          arm,
+          appliedAt: Date.now(),
+          rationale: proposal.rationale ?? null,
+        });
+        st.appliedChanges = st.appliedChanges.slice(-50);
+      },
+      "change",
+      { message: `Tracking applied change ${proposal.target}`, arm },
+    );
+  }
+  // Auto-revert an applied change that has had time to prove itself and is
+  // losing to Dice. The safety bound is always Dice, not an arbitrary threshold.
+  revertLosers(orders, now = Date.now()) {
+    const s = this.store.read();
+    const changes = Array.isArray(s.appliedChanges) ? s.appliedChanges : [];
+    if (!changes.length) return;
+    const trips = closedRoundTrips(orders);
+    const keep = [];
+    for (const c of changes) {
+      if (now - c.appliedAt < SHADOW_HOURS * 3600000) {
+        keep.push(c);
+        continue;
+      }
+      const armTrips = (trips[c.arm] ?? []).filter(
+        (t) => t.closed >= c.appliedAt,
+      );
+      const diceTrips = (trips[CONTROL_ARM] ?? []).filter(
+        (t) => t.closed >= c.appliedAt,
+      );
+      const pnl = armTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      const dice = diceTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      if (armTrips.length >= 3 && pnl < dice - MIN_MARGIN) {
+        try {
+          this.revert(c.target);
+          this.store.event("change", {
+            target: c.target,
+            message: `Auto-reverted ${c.target}: ${c.arm} P&L ${pnl.toFixed(2)} vs Dice ${dice.toFixed(2)}`,
+          });
+        } catch {
+          keep.push(c);
+        }
+      } else keep.push(c);
+    }
+    this.store.change(
+      (st) => {
+        st.appliedChanges = keep;
+      },
+      "change",
+      {
+        message: `Reviewed ${changes.length} applied change(s); ${keep.length} kept`,
+      },
+    );
+  }
 }
 
 function latestBackup(path) {
@@ -535,6 +698,7 @@ export function evaluateGate({
   sample,
   minSample = MIN_SAMPLE,
   controlArm = CONTROL_ARM,
+  requireControl = false,
 }) {
   const reasons = [];
   if (!targetAllowed(proposal.target))
@@ -547,7 +711,9 @@ export function evaluateGate({
   if (tier === "edge") {
     const arm = proposal.target.startsWith("rubric.")
       ? proposal.target.slice("rubric.".length)
-      : null;
+      : proposal.target.startsWith("params.")
+        ? proposal.target.slice("params.".length)
+        : null;
     const count = arm
       ? (sample?.[arm] ?? 0)
       : STRATEGY_ARMS.reduce((n, a) => n + (sample?.[a] ?? 0), 0);
@@ -555,8 +721,10 @@ export function evaluateGate({
       reasons.push(
         `Insufficient sample: ${count} closed trades ${arm ? `on ${arm}` : "across strategy arms"}, need ${minSample}`,
       );
+    // The control is the objective the review tunes against, not a hard gate
+    // unless the owner asks for it.
     const control = sample?.[controlArm] ?? 0;
-    if (control < minSample)
+    if (requireControl && control < minSample)
       reasons.push(
         `Control baseline immature: ${control}/${minSample} closed trades`,
       );

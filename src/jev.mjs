@@ -19,7 +19,9 @@ export class Jev {
     this.settings = settings;
     this.model = opts.model ?? "jev-1.13.0";
     this.timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 2000;
-    this.dailyUsdCap = Number.isFinite(opts.dailyUsdCap) ? opts.dailyUsdCap : 2;
+    this.dailyUsdCap = Number.isFinite(opts.dailyUsdCap)
+      ? opts.dailyUsdCap
+      : 20;
     this.usdPerMTok = Number.isFinite(opts.usdPerMTok)
       ? opts.usdPerMTok
       : 0.042;

@@ -14,6 +14,57 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.1.0] - 2026-10-01 - The Trade Review tunes the strategy, not just the prose
+
+The hourly review is the fine-tuner: Laya (or Jev) plus the decision model
+change the bots to beat the control arm (Dice) - more wins, fewer losses. Until
+now it could only rewrite prose rubrics and Laya's questions; a self-imposed
+"prose only" rule (added in error) kept it away from the numbers that actually
+control entry frequency. That rule is gone.
+
+### Added
+
+- **Numeric self-tuning.** New override targets `params.breakout|trend|momentum|control`
+  and `runtime`, written by the review like rubrics: entry gates (`rangeAtr`,
+  `relativeVolume`, `maxExtensionAtr`, `pullbackBars`, `topFraction`,
+  `minBreadth`), risk (`riskPct`, `maxCostRisk`, `stopPct`, `trail*`), the
+  **cadence**, **candidate cap**, **signal timeframe** and Scout's **universe
+  categories**, plus runtime cadence/candidate budget/model call budget. Each
+  key has a hard range (`src/overrides.mjs`); out-of-bounds or unknown keys
+  (capital, mode, leverage, stops-off) are refused.
+- **A Dice scoreboard** in the review context - per-arm realised P&L, wins/losses
+  and each bot's gap to the control - so proposals target the objective.
+- **Auto-revert.** Every applied arm-scoped change is tracked; after a shadow
+  period it is reverted automatically if the arm is losing to Dice. The loop is
+  closed and recursive.
+- Dashboard: cards show the **effective, auto-tuned** parameters; the Trade
+  Review panel has a **Revert** button per applied change; a stuck halt gets a
+  **Clear halt** button (`api/halt/clear`); `api/review/revert` is the endpoint.
+
+### Changed
+
+- **Cadence is 5 minutes for every bot** (was Scout 5 m / Spark 15 m / Keeper
+  1 h) and is tunable. **Candidate cap 25** (was 3). Model call budget default 5000.
+- **Scout scans every tradeable market**, not only meme/speculative; meme and
+  newly listed coins are ranked first. Listing age is tracked by first-seen
+  (Coinbase exposes no listing date).
+- **Keeper runs a 15-minute signal**; Spark and Keeper ship looser defaults.
+- **A paper fill can never set the global halt** (the Dice rounding incident);
+  only a real exchange fill can.
+- The review gate applies faster: `review.minSample` default 5, and the control
+  is the objective, not a hard gate (`review.requireControl`, default false).
+- **Laya is uncapped** (it is local and free). The Jev daily cap default is
+  raised to 20.
+
+### Verification
+
+- 226 Node tests pass, up from 217: numeric-schema bounds and unknown-key
+  refusal, paper-can't-halt vs real-can-halt, numeric proposal apply/revert,
+  numeric targets scored against their own arm, Scout accepting any category,
+  and the fast gate.
+
+---
+
 ## [3.0.4] - 2026-10-01 - Expected refusals are logged as vetoes, not errors
 
 `"Depth impact exceeds risk budget"` and the other risk/market declines are the

@@ -466,9 +466,16 @@ export class Store extends EventEmitter {
           const release = dec(o.reserve) < dv + df ? dec(o.reserve) : dv + df;
           b.reserved = sub(b.reserved, str(release));
           o.reserve = sub(o.reserve, str(release));
-          if (dec(b.cash) < 0n) s.halt = "Actual fill exceeded allocated cash";
-          if (dec(value) > dec(o.size))
-            s.halt = "Exchange buy value exceeded requested quote size";
+          // A simulated fill must never halt the whole runtime. These sanity
+          // checks exist for real exchange fills; a paper anomaly is confined to
+          // its own ledger instead of freezing every bot's entries.
+          const paper = this.config?.bots?.[o.bot]?.paper === true;
+          if (!paper) {
+            if (dec(b.cash) < 0n)
+              s.halt = "Actual fill exceeded allocated cash";
+            if (dec(value) > dec(o.size))
+              s.halt = "Exchange buy value exceeded requested quote size";
+          }
         } else {
           if (dq > 0n) {
             const pos = this.findPosition(b, o.product);

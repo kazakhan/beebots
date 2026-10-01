@@ -133,7 +133,16 @@ test("structural changes are ungated; edge changes need the arm and a control", 
   });
   assert.equal(thin.ok, false);
   assert.ok(thin.reasons.some((r) => /Insufficient sample/.test(r)));
-  assert.ok(thin.reasons.some((r) => /Control baseline immature/.test(r)));
+  // The control is the objective, not a hard gate by default (fast loop).
+  assert.ok(!thin.reasons.some((r) => /Control baseline immature/.test(r)));
+
+  const strict = evaluateGate({
+    proposal: edge,
+    sample: { breakout: 10, trend: 10, momentum: 10, control: 0 },
+    requireControl: true,
+  });
+  assert.equal(strict.ok, false);
+  assert.ok(strict.reasons.some((r) => /Control baseline immature/.test(r)));
 
   const ok = evaluateGate({
     proposal: edge,
@@ -368,4 +377,55 @@ test("apply refuses an out-of-scope target or a dropped invariant", () => {
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a numeric params proposal applies within bounds and reverts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-params-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    reviewer.apply({
+      target: "params.momentum",
+      proposed: JSON.stringify({ rangeAtr: 9, minBreadth: 6 }),
+      rationale: "tune",
+    });
+    assert.equal(reviewer.paramView("momentum").rangeAtr, 9);
+    assert.equal(reviewer.paramView("momentum").minBreadth, 6);
+    // An out-of-bounds value is refused before anything is written.
+    assert.throws(
+      () =>
+        reviewer.apply({
+          target: "params.momentum",
+          proposed: JSON.stringify({ riskPct: 50 }),
+          rationale: "bad",
+        }),
+      /riskPct must be between/,
+    );
+    assert.notEqual(reviewer.paramView("momentum").riskPct, 50);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("numeric targets are edge-tier and scored against their own arm", () => {
+  const g = evaluateGate({
+    proposal: {
+      target: "params.trend",
+      proposed: JSON.stringify({ maxExtensionAtr: 1 }),
+    },
+    sample: { trend: 1, breakout: 0, momentum: 0, control: 0 },
+  });
+  assert.equal(g.tier, "edge");
+  assert.ok(
+    g.reasons.some((r) =>
+      /Insufficient sample: 1 closed trades on trend/.test(r),
+    ),
+  );
 });

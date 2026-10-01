@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.0.4";
+const EXPECTED_BUILD = "3.1.0";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -279,7 +279,7 @@ function renderReview(s) {
         const gate = p.gate?.ok
           ? `Applied (${esc(p.gate.tier ?? "")})`
           : esc((p.gate?.reasons ?? []).join("; ")) || "Not applied";
-        return `<div class="proposal ${p.applied ? "applied" : "rejected"}"><h4>${esc(p.target)} · ${p.applied ? "APPLIED" : "NOT APPLIED"}${p.gate?.tier ? ` · ${esc(p.gate.tier)}` : ""}</h4><p>${esc(p.rationale)}</p>${p.risk ? `<p class="note">risk: ${esc(p.risk)}</p>` : ""}${p.proposed ? `<details><summary>current → proposed (full text)</summary><p class="note">current</p><pre>${esc(String(p.current ?? "(none)"))}</pre><p class="note">proposed</p><pre>${esc(String(p.proposed))}</pre></details>` : ""}<p class="gate">${gate}</p></div>`;
+        return `<div class="proposal ${p.applied ? "applied" : "rejected"}"><h4>${esc(p.target)} · ${p.applied ? "APPLIED" : "NOT APPLIED"}${p.gate?.tier ? ` · ${esc(p.gate.tier)}` : ""}</h4><p>${esc(p.rationale)}</p>${p.risk ? `<p class="note">risk: ${esc(p.risk)}</p>` : ""}${p.proposed ? `<details><summary>current → proposed (full text)</summary><p class="note">current</p><pre>${esc(String(p.current ?? "(none)"))}</pre><p class="note">proposed</p><pre>${esc(String(p.proposed))}</pre></details>` : ""}<p class="gate">${gate}${p.applied ? ` <button class="revert" data-target="${esc(p.target)}" type="button">Revert</button>` : ""}</p></div>`;
       })
       .join("");
   else if (!r.error && !r.laya?.error)
@@ -406,7 +406,10 @@ function render(s) {
   const vendor = s.model?.cardTitle ?? s.model?.model ?? "Decision model";
   const warning = s.halt || s.health.error;
   $("#alert").hidden = !warning;
-  $("#alert").textContent = warning || "";
+  if (s.halt)
+    $("#alert").innerHTML =
+      `<span>${esc(s.halt)}</span> <button id="clear-halt" type="button">Clear halt</button>`;
+  else $("#alert").textContent = warning || "";
   // Flash a card once when its equity moves. The class is embedded only on the
   // render that detects the change, so a routine refresh never replays it.
   const flash = {};
@@ -429,7 +432,7 @@ function render(s) {
     details.className = "note";
     details.innerHTML =
       s.strategyVersion === 2
-        ? `<summary>Strategy parameters · v2</summary><p>Universe: ${s.bots[index].id === "breakout" ? "Meme and sourced speculative assets" : "Eligible USDC spot markets"}<br>Risk budget: ${Number(r.riskPct)}% of bot equity<br>Maximum allocation: ${Number(r.tradeFraction) * 100}% of cash<br>Execution cost / stop-risk ceiling: ${Number(r.maxCostRisk) * 100}%<br>Position limit: ${Number(r.maxPositions) || 1} per bot<br>${positionsOf(s.bots[index]).some((p) => !p.policy) ? "Existing position retains original exit rules." : "ATR and setup-based stops."}</p>`
+        ? `<summary>Strategy parameters · v2 (auto-tuned)</summary><p>Timeframe: ${esc(r.timeframe ?? "—")} · cadence ${Math.round((Number(r.cadenceMs) || 300000) / 1000)}s · candidates ${Number(r.maxCandidates) || "—"}<br>Risk budget: ${Number(r.riskPct)}% of bot equity · max allocation: ${Number(r.tradeFraction) * 100}% of cash · cost/stop ceiling: ${Number(r.maxCostRisk) * 100}%<br>${s.bots[index].id === "breakout" ? `Range ${r.rangeAtr}·ATR · relative volume ${r.relativeVolume}× · max extension ${r.maxExtensionAtr}·ATR · universe: ${(r.categories ?? []).join(", ")}` : s.bots[index].id === "trend" ? `Pullback ${r.pullbackBars} bars · max extension ${r.maxExtensionAtr}·ATR` : `Top ${Math.round(Number(r.topFraction) * 100)}% · min breadth ${r.minBreadth}`}<br>Position limit: ${Number(r.maxPositions) || 1} per bot<br>${positionsOf(s.bots[index]).some((p) => !p.policy) ? "Existing position retains original exit rules." : "ATR and setup-based stops."}<br>Tuned by the hourly Trade Review from Laya + the model.</p>`
         : `<summary>Strategy parameters</summary><p>Selected-period turnover (15 minutes): ${money(r.minPeriodTurnover)} USDC<br>Previous-24-hour turnover: ${money(r.min24hTurnover)} USDC<br>Stop: ${Number(r.stopPct)}% · trail: ${Number(r.trailPct)}%<br>Allocation per entry: ${Number(r.tradeFraction) * 100}% of available bot cash</p>`;
     card.append(details);
   });
@@ -946,6 +949,32 @@ $("#login-dialog").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
     void submitLogin();
+  }
+});
+// Owner controls for the self-improvement loop: revert an applied change, or
+// clear a stuck halt. Both require the login.
+document.addEventListener("click", async (e) => {
+  const rev = e.target.closest?.(".revert");
+  if (rev) {
+    rev.disabled = true;
+    const r = await authFetch(
+      "api/review/revert",
+      control({ target: rev.dataset.target }),
+    ).catch(() => null);
+    if (!r || !r.ok) {
+      rev.disabled = false;
+      rev.textContent = "Revert failed";
+      return;
+    }
+    await refresh();
+    return;
+  }
+  const halt = e.target.closest?.("#clear-halt");
+  if (halt) {
+    halt.disabled = true;
+    const r = await authFetch("api/halt/clear", control({})).catch(() => null);
+    if (r && r.ok) await refresh();
+    else halt.disabled = false;
   }
 });
 setInterval(refresh, 5000);
