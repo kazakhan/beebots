@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { isEngine } from "./engines.mjs";
 export const IDS = ["breakout", "trend", "momentum"];
 // The control arm: a fourth bot that enters at RANDOM from the same universe,
 // with the same sizing and the same exits, to provide a null baseline. It is
@@ -54,6 +55,38 @@ export function validate(c) {
     );
   if (c.layaEnabled !== undefined && typeof c.layaEnabled !== "boolean")
     throw Error("layaEnabled must be boolean");
+  // The config may name a default decision engine; the dashboard selection, in
+  // the settings file, overrides it. Unknown ids are refused here so a typo
+  // cannot silently fall back to a different engine.
+  if (c.engine !== undefined && !isEngine(c.engine))
+    throw Error(
+      `Unknown engine "${c.engine}" (expected one of: jev, laya, llm, jev+llm, laya+llm)`,
+    );
+  if (c.jev !== undefined) {
+    if (typeof c.jev !== "object" || c.jev === null || Array.isArray(c.jev))
+      throw Error("Invalid jev block");
+    if (
+      c.jev.model !== undefined &&
+      (typeof c.jev.model !== "string" ||
+        !/^[A-Za-z0-9._:@/+-]{1,128}$/.test(c.jev.model))
+    )
+      throw Error("Invalid jev.model");
+    if (
+      c.jev.timeoutMs !== undefined &&
+      (!Number.isFinite(c.jev.timeoutMs) || c.jev.timeoutMs < 250)
+    )
+      throw Error("Invalid jev.timeoutMs");
+    if (
+      c.jev.dailyUsdCap !== undefined &&
+      (!Number.isFinite(c.jev.dailyUsdCap) || c.jev.dailyUsdCap <= 0)
+    )
+      throw Error("Invalid jev.dailyUsdCap");
+    if (
+      c.jev.usdPerMTok !== undefined &&
+      (!Number.isFinite(c.jev.usdPerMTok) || c.jev.usdPerMTok < 0)
+    )
+      throw Error("Invalid jev.usdPerMTok");
+  }
   if (c.review !== undefined) {
     if (
       typeof c.review !== "object" ||

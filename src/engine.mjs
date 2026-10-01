@@ -14,9 +14,17 @@ import { eligibility, assertTradable } from "./market.mjs";
 import { executionPlan, VERSION } from "./strategy-v2.mjs";
 import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
+import {
+  buildMenu,
+  parseMove,
+  engineUses,
+  engineLabel,
+  isEngine,
+  CONVICTION_LABELS,
+} from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "2.8.0";
+const BUILD = "2.9.0";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -56,6 +64,7 @@ export class Engine {
     market,
     laya,
     model,
+    jev = null,
     settings = null,
     review = null,
   }) {
@@ -66,6 +75,7 @@ export class Engine {
       market,
       laya,
       model,
+      jev,
       settings,
       reviewer: review,
     });
@@ -134,12 +144,61 @@ export class Engine {
       )
       .digest("hex");
   }
+  // The selected decision engine. Dashboard settings win; absent that, the
+  // owner's config.engine; absent that, the behaviour of the pre-2.9 runtime
+  // (Laya+LLM, or LLM-only when Laya is disabled) so an un-updated install
+  // keeps trading exactly as before.
+  engineId() {
+    const stored = this.settings?.engineValue?.();
+    if (isEngine(stored)) return stored;
+    if (isEngine(this.config.engine)) return this.config.engine;
+    return this.config.layaEnabled === false ? "llm" : "laya+llm";
+  }
+  // Compact, bounded market + position state for a System One engine. It is
+  // evidence, not full precision: the execution layer holds the exact numbers.
+  engineState(id, candidates, bot) {
+    const keys = [
+      "close",
+      "previousClose",
+      "channelHigh",
+      "channelLow",
+      "ema20",
+      "ema50",
+      "momentum7dPct",
+      "momentum24hPct",
+      "return15mPct",
+      "spreadBps",
+      "periodTurnover",
+      "turnover24h",
+      "atr",
+      "relativeVolume",
+      "compressionAtr",
+      "rankPercentile",
+      "breadth",
+      "stopPrice",
+      "maxEntry",
+      "rankScore",
+    ];
+    return {
+      bot: id,
+      positions: (Array.isArray(bot.positions) ? bot.positions : []).map(
+        (p) => ({ product: p.product, quantity: p.quantity }),
+      ),
+      candidates: (candidates ?? []).map((f) => {
+        const out = { product: f.product, held: !!f.held };
+        for (const k of keys)
+          if (Number.isFinite(f[k])) out[k] = Number(f[k].toPrecision(6));
+        return out;
+      }),
+    };
+  }
   // Active model identity for the dashboard and audit records.
   modelInfo() {
     const resolved = this.model.resolve?.();
     const provider = resolved?.provider ?? null;
     const model = resolved?.model ?? this.config.model.name;
     const spec = provider ? PROVIDERS[provider]?.models?.[model] : null;
+    const engine = this.engineId();
     return {
       provider,
       model,
@@ -150,6 +209,10 @@ export class Engine {
       free: spec?.free === true,
       hasKey: !!resolved?.key,
       keyEnv: resolved?.apiKeyEnv ?? this.config.model.apiKeyEnv ?? null,
+      // The decision engine selected for entries, distinct from the LLM above
+      // (which still runs the Trade Review even when it does not decide).
+      engine,
+      engineLabel: engineLabel(engine),
     };
   }
   async start() {
@@ -380,12 +443,16 @@ export class Engine {
             this.setError(`analysis:${id}`, null);
             continue;
           }
-          // Laya is optional evidence. With it disabled, candidates go to the
-          // model on their metrics alone; a failed classification degrades that
-          // one candidate rather than aborting the bot.
-          const layaOn = this.config.layaEnabled !== false;
+          // Which engine decides this cycle, and which components it uses.
+          const engine = this.engineId();
+          const usesJev = engineUses(engine, "jev");
+          const llmDecides = engineUses(engine, "llm");
+          // Laya+LLM attaches Laya's per-candidate classification as evidence.
+          // Every other engine either asks one action question (Jev/Laya,
+          // below) or skips analysis (LLM only). A failed classification
+          // degrades that one candidate rather than aborting the bot.
           let analyzed = candidates;
-          if (layaOn) {
+          if (engine === "laya+llm") {
             analyzed = [];
             for (const f of candidates) {
               if (this.stopped) return;
@@ -421,40 +488,132 @@ export class Engine {
             this.health.laya = { ready: false, disabled: true, at: Date.now() };
           }
           const day = new Date().toISOString().slice(0, 10);
-          if (v2) {
-            const usage = this.store.read().modelUsage;
-            if (
-              usage?.day === day &&
-              usage.calls >= (this.config.model.maxCallsPerDay ?? 1000)
-            )
-              throw Error("Daily decision-model call budget reached");
-            // Count the attempt before the call so a crash mid-request still
-            // consumes budget. Tokens and cost are recorded once it returns.
-            this.store.change((s) => {
-              if (s.modelUsage?.day !== day)
-                s.modelUsage = this.store.emptyUsage(day);
-              s.modelUsage.calls = Number(s.modelUsage.calls) || 0;
-              s.modelUsage.calls++;
+          let d;
+          let llmUsage = false;
+          if (llmDecides) {
+            if (v2) {
+              const usage = this.store.read().modelUsage;
+              if (
+                usage?.day === day &&
+                usage.calls >= (this.config.model.maxCallsPerDay ?? 1000)
+              )
+                throw Error("Daily decision-model call budget reached");
+              // Count the attempt before the call so a crash mid-request still
+              // consumes budget. Tokens and cost are recorded once it returns.
+              this.store.change((s) => {
+                if (s.modelUsage?.day !== day)
+                  s.modelUsage = this.store.emptyUsage(day);
+                s.modelUsage.calls = Number(s.modelUsage.calls) || 0;
+                s.modelUsage.calls++;
+              });
+            }
+            // Jev+LLM: Jev's proposed move is supplied as evidence. A Jev
+            // failure is not fatal - the LLM still decides on the metrics.
+            let evidence = null;
+            if (usesJev && this.jev) {
+              const read = await this.jev.decide({
+                state: this.engineState(id, analyzed, bot),
+                menu: buildMenu({
+                  candidates: analyzed,
+                  positions,
+                  maxPositions,
+                }),
+                convictionLabels: CONVICTION_LABELS,
+              });
+              if (read?.ok) {
+                const move = parseMove(read.choice);
+                evidence = {
+                  engine: "jev",
+                  choice: read.choice,
+                  action: move?.action ?? null,
+                  product: move?.product ?? null,
+                  probabilities: read.probabilities,
+                  confidence: read.confidence,
+                  conviction: read.conviction,
+                  convictionRaw: read.convictionRaw,
+                };
+              } else
+                this.store.event("status", {
+                  bot: id,
+                  message: `Jev evidence unavailable (${read?.reason ?? "error"})`,
+                });
+            }
+            d = await this.model.decide({
+              strategy:
+                (legacyPosition
+                  ? this.legacyStrategies[id]
+                  : this.strategies[id]) +
+                "\nConfigured rules: " +
+                JSON.stringify(
+                  legacyPosition ? positions.filter((p) => !p.policy) : rules,
+                ),
+              // The model needs the current holdings and the cap to decide
+              // whether a BUY is even possible, so it is told both explicitly.
+              bot: { ...bot, maxPositions },
+              candidates: analyzed,
+              evidence,
             });
+            llmUsage = true;
+          } else {
+            // The engine itself decides: one System One choice over the valid
+            // moves. Jev and Laya share the contract; a failed call holds the
+            // bot, exactly as a missing model would.
+            const menu = buildMenu({
+              candidates: analyzed,
+              positions,
+              maxPositions,
+            });
+            const state = this.engineState(id, analyzed, bot);
+            const read = usesJev
+              ? this.jev
+                ? await this.jev.decide({
+                    state,
+                    menu,
+                    convictionLabels: CONVICTION_LABELS,
+                  })
+                : {
+                    ok: false,
+                    reason: "error",
+                    error: { message: "Jev client is not available" },
+                  }
+              : await this.laya.decide({
+                  state,
+                  menu,
+                  convictionLabels: CONVICTION_LABELS,
+                });
+            if (!read?.ok)
+              throw Error(
+                `Decision engine ${engineLabel(engine)} unavailable: ${
+                  read?.error?.message ?? read?.reason ?? "no answer"
+                }`,
+              );
+            if (!usesJev)
+              this.health.laya = {
+                ready: true,
+                queueDepth: read.queue_depth,
+                at: Date.now(),
+              };
+            const move = parseMove(read.choice);
+            if (!move)
+              throw Error(`${engineLabel(engine)} returned an off-menu move`);
+            d = {
+              action: move.action,
+              product: move.product,
+              reason:
+                `${engineLabel(engine)} chose ${read.choice}` +
+                (read.convictionRaw !== null && read.convictionRaw !== undefined
+                  ? ` (conviction ${read.convictionRaw})`
+                  : ""),
+              model: read.model ?? engine,
+              provider: usesJev ? "jev" : null,
+              engine,
+              usage: null,
+            };
           }
-          const d = await this.model.decide({
-            strategy:
-              (legacyPosition
-                ? this.legacyStrategies[id]
-                : this.strategies[id]) +
-              "\nConfigured rules: " +
-              JSON.stringify(
-                legacyPosition ? positions.filter((p) => !p.policy) : rules,
-              ),
-            // The model needs the current holdings and the cap to decide whether
-            // a BUY is even possible, so it is told both explicitly.
-            bot: { ...bot, maxPositions },
-            candidates: analyzed,
-          });
           // Usage accounting is telemetry. It must never be able to abort a
           // decision or block an order, so a failure here is recorded and
           // swallowed rather than thrown into the per-bot catch below.
-          if (v2)
+          if (v2 && llmUsage)
             try {
               this.store.recordModelCall({
                 day,

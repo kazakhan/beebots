@@ -9,6 +9,7 @@ import {
   needsEndpoint,
 } from "./providers.mjs";
 import { Settings } from "./settings.mjs";
+import { engineCatalog, isEngine } from "./engines.mjs";
 const derive = promisify(scrypt);
 export function createServer({
   config,
@@ -74,6 +75,7 @@ export function createServer({
   function offer() {
     return {
       providers: catalogue(),
+      engines: engineCatalog(),
       current: settings ? settings.redacted() : null,
     };
   }
@@ -179,7 +181,17 @@ export function createServer({
           return json(403, { error: "Invalid control origin" });
         const body = await jsonBody(req);
         if (body.error) return json(body.status ?? 400, { error: body.error });
-        const { provider, model, apiKey, clearKey, endpoint } = body.data;
+        const {
+          provider,
+          model,
+          apiKey,
+          clearKey,
+          endpoint,
+          engine,
+          jevApiKey,
+          clearJevKey,
+          jevModel,
+        } = body.data;
         if (
           apiKey !== undefined &&
           apiKey !== null &&
@@ -194,6 +206,22 @@ export function createServer({
           typeof endpoint !== "string"
         )
           return json(400, { error: "Invalid endpoint" });
+        if (engine !== undefined && engine !== null && !isEngine(engine))
+          return json(400, { error: "Unknown decision engine" });
+        if (
+          jevApiKey !== undefined &&
+          jevApiKey !== null &&
+          typeof jevApiKey !== "string"
+        )
+          return json(400, { error: "Invalid Jev API key" });
+        if (clearJevKey !== undefined && typeof clearJevKey !== "boolean")
+          return json(400, { error: "Invalid clearJevKey" });
+        if (
+          jevModel !== undefined &&
+          jevModel !== null &&
+          typeof jevModel !== "string"
+        )
+          return json(400, { error: "Invalid Jev model" });
         let saved;
         try {
           saved = settings.save({
@@ -202,18 +230,24 @@ export function createServer({
             apiKey,
             clearKey,
             endpoint,
+            engine,
+            jevApiKey,
+            clearJevKey,
+            jevModel,
           });
         } catch (e) {
           return json(400, { error: e.message });
         }
-        // The audit record names the provider and model only. An API key or a
-        // typed endpoint must never reach the event log, which is replayed to
-        // every connected view.
+        // The audit record names the provider, model and engine only. An API
+        // key or a typed endpoint must never reach the event log, which is
+        // replayed to every connected view.
         store.change(() => {}, "control", {
-          message: "Decision-model selection changed",
+          message: "Decision-engine selection changed",
           provider: saved.provider,
           model: saved.model,
+          engine: saved.engine,
           keyUpdated: apiKey ? true : !!clearKey,
+          jevKeyUpdated: jevApiKey ? true : !!clearJevKey,
           local: needsEndpoint(saved.provider) === true,
         });
         return json(200, offer());
@@ -264,7 +298,22 @@ export function createServer({
       ) {
         if (!(await control(req)))
           return json(403, { error: "Invalid control origin" });
+        // Best-effort body: older callers send nothing, in which case the LLM
+        // probe runs as before. A Jev or Laya engine is probed directly.
+        let target;
         try {
+          let text = "";
+          for await (const chunk of req) {
+            text += chunk;
+            if (text.length > 1024) break;
+          }
+          target = text ? JSON.parse(text)?.engine : undefined;
+        } catch {
+          target = undefined;
+        }
+        try {
+          if (target === "jev") return json(200, await engine.jev.probe());
+          if (target === "laya") return json(200, await engine.laya.ping());
           return json(200, await engine.model.probe());
         } catch (e) {
           // Message only; the probe discards provider response bodies.

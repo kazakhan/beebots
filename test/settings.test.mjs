@@ -533,3 +533,140 @@ test("the model.env key is never forwarded to a different provider", () => {
     f.cleanup();
   }
 });
+
+// --- decision-engine selection (2.9.0) -----------------------------------
+
+test("an install with no engine setting defaults to Laya + LLM", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.settings.engineValue(), "laya+llm");
+    assert.equal(f.settings.redacted().engine, "laya+llm");
+    assert.equal(f.settings.redacted().engineLabel, "Laya + LLM");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("the default engine option overrides the built-in default", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-settings-"));
+  try {
+    const s = new Settings({
+      dataDir: dir,
+      fallback: { baseUrl: "https://api.deepseek.com", name: "deepseek-flash" },
+      defaultEngine: "llm",
+    });
+    assert.equal(s.engineValue(), "llm");
+    // An unknown default is refused and the built-in default applies.
+    const bad = new Settings({
+      dataDir: dir,
+      fallback: { baseUrl: "https://api.deepseek.com", name: "deepseek-flash" },
+      defaultEngine: "nope",
+    });
+    assert.equal(bad.engineValue(), "laya+llm");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the engine and a separate Jev key persist owner-only and are masked", () => {
+  const f = fixture();
+  try {
+    const s = f.settings;
+    s.save({
+      provider: "zai",
+      model: "glm-4.7-flash",
+      apiKey: "zai-secret-key-1234",
+      engine: "jev+llm",
+      jevApiKey: "jev-secret-key-9876",
+      jevModel: "jev-1.13.0",
+    });
+    assert.equal(statSync(join(f.dir, "model.json")).mode & 0o777, 0o600);
+    const r = s.redacted();
+    assert.equal(r.engine, "jev+llm");
+    assert.equal(r.engineLabel, "Jev + LLM");
+    assert.equal(r.jev.hasKey, true);
+    assert.equal(r.jev.keyHint, "…9876");
+    assert.equal(r.jev.model, "jev-1.13.0");
+    // Neither credential may appear in the redacted shape the HTTP layer sends.
+    assert.ok(!JSON.stringify(r).includes("jev-secret-key-9876"));
+    assert.ok(!JSON.stringify(r).includes("zai-secret-key-1234"));
+    // effectiveJev is the one place the Jev key is exposed, for the client.
+    assert.deepEqual(s.effectiveJev(), {
+      model: "jev-1.13.0",
+      key: "jev-secret-key-9876",
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("an unknown engine, a bad Jev model and a whitespace Jev key are refused", () => {
+  const f = fixture();
+  try {
+    const s = f.settings;
+    const base = {
+      provider: "zai",
+      model: "glm-4.7-flash",
+      apiKey: "k".repeat(8),
+    };
+    assert.throws(
+      () => s.save({ ...base, engine: "nope" }),
+      /Unknown decision engine/,
+    );
+    assert.throws(
+      () => s.save({ ...base, jevModel: "a b" }),
+      /Invalid Jev model/,
+    );
+    assert.throws(
+      () => s.save({ ...base, jevApiKey: "bad key\nX: y" }),
+      /Invalid Jev API key/,
+    );
+    assert.throws(
+      () => s.save({ ...base, jevApiKey: "a", clearJevKey: true }),
+      /Cannot set and clear the Jev key/,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a blank Jev key keeps the stored one; clearJevKey removes it", () => {
+  const f = fixture();
+  try {
+    const s = f.settings;
+    const base = {
+      provider: "zai",
+      model: "glm-4.7-flash",
+      apiKey: "k".repeat(8),
+    };
+    s.save({ ...base, engine: "laya+llm", jevApiKey: "keep-jev-key" });
+    assert.equal(s.effectiveJev().key, "keep-jev-key");
+    // Switching engine does not lose the Jev key.
+    s.save({ ...base, engine: "laya" });
+    assert.equal(s.effectiveJev().key, "keep-jev-key");
+    s.save({ ...base, clearJevKey: true });
+    assert.equal(s.effectiveJev().key, null);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("TYPESAFE_API_KEY is the Jev key fallback before any stored one", () => {
+  const f = fixture();
+  try {
+    process.env.TYPESAFE_API_KEY = "env-jev-key";
+    assert.equal(f.settings.keyJev(), "env-jev-key");
+    assert.equal(f.settings.redacted().jev.hasKey, true);
+    f.settings.save({
+      provider: "zai",
+      model: "glm-4.7-flash",
+      apiKey: "k".repeat(8),
+      jevApiKey: "stored-jev-key",
+    });
+    // A stored key wins over the environment.
+    assert.equal(f.settings.keyJev(), "stored-jev-key");
+  } finally {
+    delete process.env.TYPESAFE_API_KEY;
+    f.cleanup();
+  }
+});

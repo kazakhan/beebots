@@ -86,7 +86,7 @@ function costTitle(s) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "2.8.0";
+const EXPECTED_BUILD = "2.9.0";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -377,6 +377,28 @@ const control = (body) => ({
 const selectedProvider = () =>
   catalogue?.providers.find((x) => x.id === $("#settings-provider")?.value) ??
   null;
+// The selected decision engine, read from the server's catalogue so the browser
+// never duplicates the list. Its flags say whether it uses Jev and/or the LLM.
+const selectedEngine = () =>
+  catalogue?.engines?.find((x) => x.id === $("#settings-engine")?.value) ??
+  null;
+const engineNeedsJev = () => selectedEngine()?.jev === true;
+const engineDecidesLocally = () => selectedEngine()?.llm === false;
+// Seed the engine dropdown once; it is a fixed list.
+function fillEngines() {
+  const el = $("#settings-engine");
+  if (!el || !catalogue?.engines?.length || el.options.length) return;
+  for (const e of catalogue.engines) el.add(new Option(e.label, e.id));
+  el.onchange = () => applyEngineShape();
+}
+// Show the Jev fields only when the selected engine actually uses Jev. There is
+// no point asking for Jev information otherwise.
+function applyEngineShape() {
+  const jev = engineNeedsJev();
+  $("#settings-jev-key-row").hidden = !jev;
+  $("#settings-jev-model-row").hidden = !jev;
+  $("#settings-jev-state").hidden = !jev;
+}
 // Seed the provider dropdown once from the catalogue; providers are a fixed list.
 function fillProviders() {
   const providerEl = $("#settings-provider");
@@ -470,7 +492,33 @@ function renderSettings(s) {
   const provider = s.model?.provider ?? catalogue.current?.provider;
   if (provider && $("#settings-provider").value !== provider)
     $("#settings-provider").value = provider;
+  // The engine is authoritative in the settings file; fall back to the live
+  // snapshot's model block for a backend that predates it.
+  const engine =
+    s.modelConfig?.engine ?? s.model?.engine ?? catalogue.current?.engine;
+  if (engine && $("#settings-engine").value !== engine)
+    $("#settings-engine").value = engine;
   applyProviderShape();
+  applyEngineShape();
+  const eng = selectedEngine();
+  $("#settings-engine-state").textContent = eng
+    ? engineDecidesLocally()
+      ? `${eng.label} makes the entry decision directly. The LLM is not consulted for entries (it still runs the Trade Review).`
+      : `${eng.label}: structured evidence feeds the LLM, which makes the final entry decision.`
+    : "—";
+  const jev = s.modelConfig?.jev;
+  if (jev) {
+    const modelEl = $("#settings-jev-model");
+    if (!modelEl.value || modelEl.dataset.programmatic === "1") {
+      modelEl.value = jev.model ?? jev.modelDefault ?? "";
+      modelEl.dataset.programmatic = "1";
+    }
+    $("#settings-jev-state").textContent = jev.hasKey
+      ? `Jev key stored (${
+          jev.keyHint ? "ends " + jev.keyHint : "configured"
+        }).${jev.keyEnv ? ` Also readable from ${jev.keyEnv}.` : ""} Leave the field blank to keep it.`
+      : `No Jev key stored. Jev fails closed (bots hold) until one is entered or ${jev.keyEnv ?? "TYPESAFE_API_KEY"} is set.`;
+  }
   $("#settings-current").textContent = s.model?.label
     ? `Active: ${s.model.label}${s.model.free ? " (no provider charge)" : ""}`
     : "No decision model selected.";
@@ -507,6 +555,7 @@ async function loadCatalogue() {
     if (!r.ok) return;
     catalogue = await r.json();
     fillProviders();
+    fillEngines();
     // Only touch the form while the dialog is open; otherwise the user could be
     // mid-edit when a background refresh arrives.
     if (state && $("#model-dialog")?.open) renderSettings(state);
@@ -604,15 +653,26 @@ $("#settings-save").onclick = async () => {
   )
     return;
   $("#settings-result").textContent = "Saving…";
+  const engine = $("#settings-engine").value;
+  const payload = {
+    provider: $("#settings-provider").value,
+    model: $("#settings-model-select").value,
+    engine,
+    ...(apiKey ? { apiKey } : {}),
+    ...(selectedProvider()?.endpoint === true
+      ? { endpoint: $("#settings-endpoint").value.trim() }
+      : {}),
+  };
+  // Only send Jev fields when the engine uses Jev. A blank key keeps the stored
+  // one, matching the provider key behaviour.
+  if (engineNeedsJev()) {
+    const jevModel = $("#settings-jev-model").value.trim();
+    const jevKey = $("#settings-jev-key").value.trim();
+    if (jevModel) payload.jevModel = jevModel;
+    if (jevKey) payload.jevApiKey = jevKey;
+  }
   const r = await fetch("api/settings", {
-    ...control({
-      provider: $("#settings-provider").value,
-      model: $("#settings-model-select").value,
-      ...(apiKey ? { apiKey } : {}),
-      ...(selectedProvider()?.endpoint === true
-        ? { endpoint: $("#settings-endpoint").value.trim() }
-        : {}),
-    }),
+    ...control(payload),
   }).catch(() => null);
   if (!r || !r.ok) {
     $("#settings-result").textContent = r
@@ -620,15 +680,20 @@ $("#settings-save").onclick = async () => {
       : "Request failed";
     return;
   }
-  // Clear the field immediately: the key now lives in a 0600 file and must not
+  // Clear the fields immediately: the keys now live in a 0600 file and must not
   // linger in the DOM or in browser history.
   $("#settings-key").value = "";
-  $("#settings-result").textContent = "Saved. The next cycle uses this model.";
+  $("#settings-jev-key").value = "";
+  $("#settings-result").textContent =
+    "Saved. The next cycle uses this selection.";
   await refresh();
 };
 $("#settings-test").onclick = async () => {
   $("#settings-result").textContent = "Testing…";
-  const r = await fetch("api/settings/test", control({})).catch(() => null);
+  const r = await fetch(
+    "api/settings/test",
+    control({ engine: $("#settings-engine").value }),
+  ).catch(() => null);
   if (!r || !r.ok) {
     $("#settings-result").textContent = r
       ? `Failed: ${(await r.json().catch(() => ({}))).error ?? "unknown error"}`
@@ -636,7 +701,9 @@ $("#settings-test").onclick = async () => {
     return;
   }
   const d = await r.json();
-  $("#settings-result").textContent = `Reachable — served by ${d.model}`;
+  $("#settings-result").textContent = d.model
+    ? `Reachable — served by ${d.model}`
+    : "Reachable.";
 };
 $("#settings-refresh").onclick = loadModels;
 $("#filter").onchange = renderEvents;
@@ -667,7 +734,9 @@ $("#model-gear").onclick = async () => {
   dialog.showModal();
   await loadCatalogue();
   fillProviders();
+  fillEngines();
   applyProviderShape();
+  applyEngineShape();
   if (state) renderSettings(state);
   await loadModels();
 };

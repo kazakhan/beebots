@@ -6,6 +6,7 @@ import { Coinbase } from "./coinbase.mjs";
 import { Market } from "./market.mjs";
 import { UniverseMarket } from "./collector.mjs";
 import { Laya } from "./laya.mjs";
+import { Jev } from "./jev.mjs";
 import { DecisionModel } from "./model.mjs";
 import { Settings } from "./settings.mjs";
 import { TradeReview } from "./review.mjs";
@@ -51,6 +52,10 @@ try {
   const settings = new Settings({
     dataDir: config.dataDir,
     fallback: config.model,
+    // Config may name a default engine; absent one, an install with Laya
+    // disabled defaults to LLM-only, matching the pre-2.9 behaviour.
+    defaultEngine:
+      config.engine ?? (config.layaEnabled === false ? "llm" : "laya+llm"),
   });
   const laya = new Laya(
     config.layaSocket,
@@ -60,6 +65,18 @@ try {
   const model = new DecisionModel(
     config.model,
     config.modelTimeoutMs,
+    settings,
+  );
+  // Jev (TypeSafe). Started even when Jev is not the selected engine: the key
+  // and model are resolved per call, so switching to a Jev engine takes effect
+  // without a restart, and an unconfigured Jev fails closed.
+  const jev = new Jev(
+    {
+      model: config.jev?.model,
+      timeoutMs: config.jev?.timeoutMs,
+      dailyUsdCap: config.jev?.dailyUsdCap,
+      usdPerMTok: config.jev?.usdPerMTok,
+    },
     settings,
   );
   // Hourly self-assessment. Runs on the wall clock; see Engine.scheduleReview.
@@ -77,6 +94,7 @@ try {
     market,
     laya,
     model,
+    jev,
     settings,
     review: reviewer,
   });

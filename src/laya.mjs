@@ -115,6 +115,53 @@ export class Laya {
     this.tail = p.catch(() => {});
     return p;
   }
+  // The classifier-only and Laya+LLM engines ask Laya to pick one move from the
+  // valid menu and score its conviction - the same choice/score contract Jev
+  // speaks. Laya is a System One model too, so this needs no new machinery.
+  // Throws on failure; the engine's per-bot catch holds the bot.
+  async decide({
+    state,
+    menu,
+    convictionLabels = [],
+    timeoutMs = this.timeoutMs,
+  }) {
+    const labels = Object.keys(menu ?? {});
+    const r = await this.ask(
+      state,
+      {
+        action: {
+          type: "choice",
+          instructions: "Pick your next move from the valid options.",
+          criteria: menu,
+        },
+        conviction: {
+          type: "score",
+          instructions: "How strong is the evidence for that move?",
+          criteria: convictionLabels,
+        },
+      },
+      timeoutMs,
+    );
+    const a = r.answers?.action,
+      c = r.answers?.conviction;
+    if (!a || typeof a.choice !== "string" || !labels.includes(a.choice))
+      throw Error("Unexpected Laya action schema");
+    const maxConv = Math.max(0, convictionLabels.length - 1);
+    return {
+      ok: true,
+      choice: a.choice,
+      probabilities: a.probabilities ?? null,
+      confidence: Number.isFinite(a.confidence) ? a.confidence : null,
+      conviction: Number.isFinite(c?.score)
+        ? Math.max(0, Math.min(maxConv, Math.round(c.score)))
+        : null,
+      convictionRaw: Number.isFinite(c?.score) ? c.score : null,
+      model: "laya",
+      answers: r.answers,
+      elapsed_s: r.elapsed_s,
+      queue_depth: r.queue_depth,
+    };
+  }
   analyze(state, style) {
     // One in-flight inference from this application; no automatic retry after timeout.
     const run = async () => {

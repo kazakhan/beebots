@@ -26,6 +26,7 @@ import {
   needsEndpoint,
   allowsNoKey,
 } from "./providers.mjs";
+import { isEngine, engineLabel, DEFAULT_ENGINE } from "./engines.mjs";
 
 const MAX_KEY = 200;
 // Owner-supplied endpoints (Ollama) are accepted as typed. The owner asked for
@@ -34,14 +35,22 @@ const MAX_KEY = 200;
 const MAX_ENDPOINT = 300;
 
 export class Settings {
-  constructor({ dataDir, fallback }) {
+  constructor({ dataDir, fallback, defaultEngine = DEFAULT_ENGINE }) {
     this.path = join(dataDir, "model.json");
+    // An install that has never picked an engine falls back to the one that
+    // matches its config: Laya+LLM normally, LLM-only when Laya is disabled.
+    this.defaultEngine = isEngine(defaultEngine)
+      ? defaultEngine
+      : DEFAULT_ENGINE;
     this.fallback = {
       baseUrl: fallback?.baseUrl ?? null,
       name: fallback?.name ?? null,
       apiKeyEnv: fallback?.apiKeyEnv || "BEEBOTS_MODEL_KEY",
       allowNoKey: !!fallback?.allowNoKey,
     };
+    // The default Jev model is code, not owner input, so a fresh install has a
+    // valid value the moment Jev is selected.
+    this.defaultJevModel = "jev-1.13.0";
     this.cache = null;
   }
 
@@ -122,6 +131,17 @@ export class Settings {
           ? stored.apiKey
           : null
         : null;
+    // The selected engine and the Jev credential are independent of the LLM
+    // provider selection: an owner may keep a Jev key while running Laya+LLM.
+    // The engine is always a valid id; a stored unknown value falls back.
+    const engine = isEngine(stored?.engine)
+      ? stored.engine
+      : this.defaultEngine;
+    const jevApiKey =
+      typeof stored?.jevApiKey === "string" ? stored.jevApiKey : null;
+    const jevModel = validModelId(stored?.jevModel)
+      ? stored.jevModel
+      : this.defaultJevModel;
     this.cache = {
       provider,
       model,
@@ -130,6 +150,9 @@ export class Settings {
           ? stored.endpoint
           : null,
       apiKey: storedKey,
+      engine,
+      jevApiKey,
+      jevModel,
       source: stored && isProvider(stored?.provider) ? "dashboard" : "config",
     };
     return this.cache;
@@ -205,6 +228,27 @@ export class Settings {
     };
   }
 
+  // The selected decision engine. Always a valid id.
+  engineValue() {
+    return this.read().engine;
+  }
+
+  // The Jev key precedence: dashboard settings file, then TYPESAFE_API_KEY.
+  // Unlike a provider key, there is only one Jev vendor, so the env fallback is
+  // never bound to a different provider selection.
+  keyJev() {
+    const s = this.read();
+    if (s.jevApiKey) return s.jevApiKey;
+    return process.env.TYPESAFE_API_KEY ?? null;
+  }
+
+  // Full resolution for the Jev client at call time. Timeout and daily cap are
+  // service config, not dashboard state, so they live with the client.
+  effectiveJev() {
+    const s = this.read();
+    return { model: s.jevModel, key: this.keyJev() };
+  }
+
   // First catalogue entry, used only when nothing is configured. The unknown-name
   // warning is what tells the operator this substitution happened.
   firstModel(providerId) {
@@ -220,6 +264,7 @@ export class Settings {
   redacted() {
     const s = this.read();
     const key = this.key(s.provider);
+    const jevKey = this.keyJev();
     return {
       provider: s.provider,
       model: s.model,
@@ -235,6 +280,18 @@ export class Settings {
       defaultEndpoint: needsEndpoint(s.provider)
         ? this.defaultEndpoint(s.provider)
         : null,
+      // The decision-engine selection and the separate Jev credential. The Jev
+      // key is masked exactly like the provider key: a hint of the last four
+      // characters, never the value.
+      engine: s.engine,
+      engineLabel: engineLabel(s.engine),
+      jev: {
+        model: s.jevModel,
+        modelDefault: this.defaultJevModel,
+        hasKey: !!jevKey,
+        keyHint: jevKey ? `…${jevKey.slice(-4)}` : null,
+        keyEnv: "TYPESAFE_API_KEY",
+      },
       // Non-null when config.json named a model this catalogue does not offer.
       // Surfaced so a retired or misspelt name cannot pass unnoticed.
       unknownModel: this.unknownNote ?? null,
@@ -246,7 +303,17 @@ export class Settings {
   // host-specific. A free-text endpoint is accepted only for providers flagged
   // `endpoint`, and never for one that has a fixed catalogue URL - so this
   // cannot aim a catalogue provider's API key at an arbitrary host.
-  save({ provider, model, apiKey, clearKey, endpoint }) {
+  save({
+    provider,
+    model,
+    apiKey,
+    clearKey,
+    endpoint,
+    engine,
+    jevApiKey,
+    clearJevKey,
+    jevModel,
+  }) {
     if (!isProvider(provider)) throw Error("Unknown decision-model provider");
     // A dynamic provider's models are discovered, so any well-formed id from its
     // listing is acceptable; only a custom ENDPOINT is still restricted to the
@@ -264,6 +331,17 @@ export class Settings {
       throw Error("This provider does not accept a custom endpoint");
     if (clearKey && apiKey)
       throw Error("Cannot set and clear the key together");
+    if (engine !== undefined && engine !== null && !isEngine(engine))
+      throw Error("Unknown decision engine");
+    if (jevModel !== undefined && jevModel !== null && !validModelId(jevModel))
+      throw Error("Invalid Jev model");
+    if (clearJevKey && jevApiKey)
+      throw Error("Cannot set and clear the Jev key together");
+    if (jevApiKey !== undefined && jevApiKey !== null && jevApiKey !== "") {
+      if (typeof jevApiKey !== "string" || jevApiKey.length > MAX_KEY)
+        throw Error("Invalid Jev API key");
+      if (/\s/.test(jevApiKey)) throw Error("Invalid Jev API key");
+    }
     const current = this.read();
     let key = allowsNoKey(provider)
       ? null
@@ -291,7 +369,22 @@ export class Settings {
       !!process.env[this.fallback.apiKeyEnv];
     if (!allowsNoKey(provider) && !key && !clearKey && !envApplies)
       throw Error("No API key is configured for this provider");
-    this.write({ provider, model, apiKey: key, endpoint: savedEndpoint });
+    // The engine and Jev credential persist independently of the provider key.
+    // A blank Jev key field keeps the stored one; clearJevKey removes it.
+    const savedEngine = isEngine(engine) ? engine : current.engine;
+    const savedJevModel = validModelId(jevModel) ? jevModel : current.jevModel;
+    let jevKey = current.jevApiKey;
+    if (clearJevKey) jevKey = null;
+    if (typeof jevApiKey === "string" && jevApiKey) jevKey = jevApiKey;
+    this.write({
+      provider,
+      model,
+      apiKey: key,
+      endpoint: savedEndpoint,
+      engine: savedEngine,
+      jevApiKey: jevKey,
+      jevModel: savedJevModel,
+    });
     return this.redacted();
   }
 

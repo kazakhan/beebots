@@ -158,7 +158,26 @@
           Protective exits are pure code and are unaffected. Pause entries
           first, then watch a few cycles before resuming.
         </p>
-        <label>Provider<select id="settings-provider"></select></label>
+        <label>Decision engine<select id="settings-engine"></select></label>
+        <p class="note" id="settings-engine-state">—</p>
+        <label id="settings-jev-key-row" hidden
+          >Jev API key<input
+            id="settings-jev-key"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Leave blank to keep the stored key"
+        /></label>
+        <label id="settings-jev-model-row" hidden
+          >Jev model<input
+            id="settings-jev-model"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="jev-1.13.0"
+        /></label>
+        <p class="note" id="settings-jev-state">—</p>
+        <label>LLM provider<select id="settings-provider"></select></label>
         <label id="settings-endpoint-row" hidden
           >Endpoint<input
             id="settings-endpoint"

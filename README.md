@@ -1,19 +1,41 @@
-# BeeBots · Coinbase × Laya
+# BeeBots · Coinbase
+
+A self-hosted, paper-first spot-trading bot for Coinbase. Three named agents
+trade independent USDC ledgers on live market data; every decision is recorded
+before it acts, and a password-protected dashboard shows each order, fill, fee
+and decision as it happens. Protective exits are plain code, and the runtime
+submits real orders only when explicitly configured to.
 
 **Strategy v2:** automatic USDC discovery, speculative breakout Scout, trend-pullback
 Keeper and cross-market momentum Spark. See [v2 release and migration](deploy/UPGRADE-V2.md).
 The original v1 runtime/config remain compatible for existing positions and tests;
 the paragraphs below describe the initial deployment where they mention a fixed universe.
 
-Three real spot-trading agents with independent capital ledgers, Unix-socket Laya
-analysis, an OpenAI-compatible decision-model adapter, Coinbase SDK execution,
-and a password-protected live dashboard/leaderboard behind lighttpd.
+This is a **Coinbase rebase of [beebots](https://github.com/imikerussell/beebots)
+by Mike Russell** (MIT) — the OKX perpetuals project in which every decision came
+from **Jev**, TypeSafe AI's System One decision model
+([introducing System One models](https://typesafe.ai/blog/introducing-system-one-models-and-jev);
+Laya is the open-weights equivalent:
+[laya, how it works](https://huggingface.co/blog/sora-2/laya-ai-model-how-it-works-run-it-locally-and-eval)).
+Upstream snapshot `5ddd6d18e9646f068c5ee2f5703d1e829461c76a`. The original OKX/Jev
+source is retained in the parent repository for provenance.
 
-Based on the BeeBots project by Mike Russell, MIT licensed. Upstream snapshot:
-`5ddd6d18e9646f068c5ee2f5703d1e829461c76a`. The original OKX/Jev source is retained
-in the parent repository for provenance. This directory is the deployable
-Coinbase runtime, with a new spot ledger and independent entry point. It does not
-load the upstream futures engine, forced-entry rules, Hive uploader or portraits.
+This directory is the deployable Coinbase runtime. It keeps the upstream idea — a
+System One engine reads structured state, plain code gates every order, and the
+ledger is the record — and adds an independent spot ledger, a Unix-socket Laya
+integration, an OpenAI-compatible decision model, and a selectable **decision
+engine**:
+
+| Engine       | Decides        | Notes                                            |
+| ------------ | -------------- | ------------------------------------------------ |
+| `Jev`        | Jev (TypeSafe) | the original beebots engine; needs a Jev API key |
+| `Laya`       | Laya (local)   | the open-weights System One model                |
+| `LLM`        | provider model | an OpenAI-compatible chat model                  |
+| `Jev + LLM`  | LLM            | Jev's proposed move is supplied as evidence      |
+| `Laya + LLM` | LLM            | Laya's classification is evidence (the default)  |
+
+It does not load the upstream futures engine, forced-entry rules, Hive uploader
+or portraits.
 
 > **This trades real money.** It submits live market orders on Coinbase. It is
 > not investment advice, comes with no warranty, and the shipped strategy

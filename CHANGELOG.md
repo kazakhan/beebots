@@ -14,6 +14,65 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [2.9.0] - 2026-10-01 - Decision-engine selection: Jev, Laya, LLM and hybrids
+
+The original [beebots](https://github.com/imikerussell/beebots) runs every
+decision on **Jev**, TypeSafe AI's System One model. This port had replaced it
+with Laya analysis plus a provider-backed LLM. Jev is selectable again, and the
+component that decides is now a setting.
+
+### Added
+
+- **Decision-engine selection** in the dashboard gear dialog: `Jev`, `Laya`,
+  `LLM`, `Jev + LLM`, `Laya + LLM`.
+  - `Jev` and `Laya` make the entry decision directly, from one System One
+    `choice` over the valid moves plus a `score` for conviction - the original
+    beebots contract. Plain code still gates every order.
+  - `LLM` is the previous Laya-disabled behaviour: the provider model decides.
+  - `Jev + LLM` supplies Jev's proposed move to the LLM as evidence and the LLM
+    decides; a Jev failure is not fatal. `Laya + LLM` is the long-standing
+    default (Laya's per-candidate classification is the evidence).
+- **`src/jev.mjs`**: a dependency-free Jev client over
+  `POST https://api.typesafe.ai/v1/systemone` (`state` + `questions` ->
+  `choice`/`score`), with a daily USD cap, exponential backoff on 429/529/5xx,
+  and fail-closed behaviour: a Jev outage holds the bot and opens nothing.
+- **`src/engines.mjs`**: the engine catalogue and the move-menu builder - one
+  source of truth for the runtime, the settings file and the dashboard.
+- A separate **Jev API key and model** in the dashboard, stored in the 0600
+  settings file beside the provider key and masked the same way. The Jev fields
+  are shown only when the selected engine actually uses Jev.
+
+### Changed
+
+- The System One menu is built from the current candidates and holdings: one BUY
+  per fresh product below the position limit, SELL/HOLD per held product, and
+  always SKIP. An off-menu answer is refused rather than guessed at.
+- `src/model.mjs` accepts an optional `evidence` argument and includes it in the
+  request as `systemOne` when a hybrid engine supplies it.
+- Config gains optional `engine` and `jev` (`model`, `timeoutMs`, `dailyUsdCap`,
+  `usdPerMTok`) blocks. The dashboard selection overrides the config default; an
+  install that sets neither keeps the pre-2.9 behaviour (Laya + LLM, or LLM when
+  `layaEnabled` is false).
+
+### Verification
+
+- 196 Node tests pass (`npm test`), up from 171. New `test/jev.test.mjs`
+  (choice/conviction, fail-closed, cap, backoff, probe), `test/engines.test.mjs`
+  (catalogue, menu, move parsing), `test/engine-selection.test.mjs` (dispatch
+  for Laya-only, Jev-only, Jev + LLM and evidence), and engine/Jev persistence
+  and masking in `test/settings.test.mjs`.
+- No test contacts a provider or an exchange. With no Jev key, Jev is covered by
+  a fake client only; the live `/v1/systemone` call is not exercised here.
+
+### Attribution
+
+- The README now introduces the project and links the upstream
+  [imikerussell/beebots](https://github.com/imikerussell/beebots), TypeSafe's
+  [System One models / Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev)
+  and [Laya](https://huggingface.co/blog/sora-2/laya-ai-model-how-it-works-run-it-locally-and-eval).
+
+---
+
 ## [2.8.0] - 2026-10-01 - Trade Review: Laya is a subject, and the gate is relaxed
 
 The Trade Review now assesses **Laya itself**, not only the bots, and can

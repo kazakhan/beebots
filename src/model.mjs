@@ -58,13 +58,23 @@ export class DecisionModel {
   // Request body varies by model capability: some models reason compulsively and
   // reject thinking:disabled, and JSON mode is not universal. An unrecognised
   // model falls back to the plain body the runtime has always sent.
-  body({ spec, model, strategy, bot, candidates }) {
+  body({ spec, model, strategy, bot, candidates, evidence }) {
     const b = {
       model,
       temperature: 0,
       messages: [
         { role: "system", content: SYSTEM_PROMPT + strategy },
-        { role: "user", content: JSON.stringify({ bot, candidates }) },
+        {
+          role: "user",
+          content: JSON.stringify({
+            bot,
+            candidates,
+            // A System One engine's proposed move (Jev in a Jev+LLM engine) is
+            // supplied as evidence. The LLM is free to disagree; it is never
+            // binding, and the code risk layer still gates the result.
+            ...(evidence ? { systemOne: evidence } : {}),
+          }),
+        },
       ],
     };
     if (spec) {
@@ -144,7 +154,7 @@ export class DecisionModel {
     throw last;
   }
 
-  async decide({ strategy, bot, candidates }) {
+  async decide({ strategy, bot, candidates, evidence = null }) {
     const resolved = this.resolve();
     if (!resolved.baseUrl) throw Error("No decision-model endpoint configured");
     this.assertEndpoint(resolved.baseUrl, resolved.local);
@@ -155,6 +165,7 @@ export class DecisionModel {
       strategy,
       bot,
       candidates,
+      evidence,
     });
     const body = await this.call(resolved, payload);
     const content = body.choices?.[0]?.message?.content;

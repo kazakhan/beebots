@@ -59,7 +59,7 @@ const engine = {
     strategyVersion: 2,
     // Matches the backend build the page expects, so the version-skew check does
     // not fire against the synthetic preview.
-    build: "2.8.0",
+    build: "2.9.0",
     // Synthetic free-model fixture: proves the cost line and provider-driven
     // labels render without any provider connection.
     modelUsage: {
@@ -145,10 +145,36 @@ const engine = {
       provider: "zai",
       model: "glm-4.7-flash",
       label: "GLM-4.7-Flash (free)",
-      cardTitle: "GLM-4.7-Flash",
+      cardTitle: "GLM-4.7-FLASH",
       free: true,
       hasKey: true,
       keyEnv: "BEEBOTS_MODEL_KEY",
+      engine: "laya+llm",
+      engineLabel: "Laya + LLM",
+    },
+    // Mirrors settings.redacted() so the dialog renders the engine selector and
+    // the Jev section without a writable data directory.
+    modelConfig: {
+      provider: "zai",
+      model: "glm-4.7-flash",
+      source: "demo",
+      hasKey: true,
+      keyHint: "…demo",
+      keyEnv: "BEEBOTS_MODEL_KEY",
+      apiKeyEnv: "BEEBOTS_MODEL_KEY",
+      fallbackName: null,
+      endpoint: null,
+      defaultEndpoint: null,
+      engine: "laya+llm",
+      engineLabel: "Laya + LLM",
+      jev: {
+        model: "jev-1.13.0",
+        modelDefault: "jev-1.13.0",
+        hasKey: false,
+        keyHint: null,
+        keyEnv: "TYPESAFE_API_KEY",
+      },
+      unknownModel: null,
     },
     coverage: {
       total: 410,
@@ -210,8 +236,19 @@ const demoSettings = {
     fallbackName: null,
     endpoint: null,
     defaultEndpoint: null,
+    engine: "laya+llm",
+    engineLabel: "Laya + LLM",
+    jev: {
+      model: "jev-1.13.0",
+      modelDefault: "jev-1.13.0",
+      hasKey: false,
+      keyHint: null,
+      keyEnv: "TYPESAFE_API_KEY",
+    },
   }),
   key: () => "demo-key",
+  engineValue: () => "laya+llm",
+  effectiveJev: () => ({ model: "jev-1.13.0", key: null }),
   save: () => {
     throw Error("Settings cannot be changed in the synthetic preview");
   },
