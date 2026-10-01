@@ -13,6 +13,7 @@ import {
 } from "./decimal.mjs";
 import { eligibility, assertTradable } from "./market.mjs";
 import { executionPlan, VERSION } from "./strategy-v2.mjs";
+import { isRefusal, refuse } from "./refusal.mjs";
 import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
 import {
@@ -25,7 +26,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.0.3";
+const BUILD = "3.0.4";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -741,12 +742,19 @@ export class Engine {
             });
           }
         } catch (e) {
-          this.setError(`analysis:${id}`, e.message);
-          this.store.event("error", {
-            bot: id,
-            component: "analysis",
-            message: e.message,
-          });
+          // A refusal (thin book, slippage over budget, entry no longer
+          // qualifies) is a normal decline, not a fault: record it as a veto.
+          if (isRefusal(e)) {
+            this.store.event("veto", { bot: id, reason: e.message });
+            this.setError(`analysis:${id}`, null);
+          } else {
+            this.setError(`analysis:${id}`, e.message);
+            this.store.event("error", {
+              bot: id,
+              component: "analysis",
+              message: e.message,
+            });
+          }
         }
       }
       // The control arm runs after the strategies so it competes for the same
@@ -756,12 +764,17 @@ export class Engine {
         try {
           await this.controlCycle();
         } catch (e) {
-          this.setError(`analysis:${CONTROL_ID}`, e.message);
-          this.store.event("error", {
-            bot: CONTROL_ID,
-            component: "analysis",
-            message: e.message,
-          });
+          if (isRefusal(e)) {
+            this.store.event("veto", { bot: CONTROL_ID, reason: e.message });
+            this.setError(`analysis:${CONTROL_ID}`, null);
+          } else {
+            this.setError(`analysis:${CONTROL_ID}`, e.message);
+            this.store.event("error", {
+              bot: CONTROL_ID,
+              component: "analysis",
+              message: e.message,
+            });
+          }
         }
       }
     } catch (e) {
@@ -996,14 +1009,14 @@ export class Engine {
         // The control arm has no setup to qualify; its randomness is the point.
         (!evidence.control && !eligibility(id, { ...evidence, ...q }, rules))
       )
-        throw Error("Entry no longer qualifies");
+        throw refuse("Entry no longer qualifies");
       // Re-check capacity and duplicates against live state: another cycle may
       // have filled a slot while this decision was being assessed.
       const held = Array.isArray(bot.positions) ? bot.positions : [];
       if (held.length >= this.store.maxPositions(id))
-        throw Error("Position limit reached while decision was pending");
+        throw refuse("Position limit reached while decision was pending");
       if (held.some((x) => x.product === product))
-        throw Error("Bot already holds this pair");
+        throw refuse("Bot already holds this pair");
       const fee = await this.exchange.fees();
       const feeRate = String(fee.fee_tier?.taker_fee_rate ?? "");
       takerFee = feeRate;
@@ -1034,7 +1047,7 @@ export class Engine {
         .filter((b2) => !this.isPaper(b2.id))
         .reduce((n, b2) => n + dec(b2.reserved), 0n);
       if (!paper && dec(reserve) > dec(balances.USDC ?? "0") - totalReserved)
-        throw Error("Insufficient unreserved exchange cash");
+        throw refuse("Insufficient unreserved exchange cash");
       // A paper arm has no exchange to satisfy, so it may open any simulated
       // size; only a real order is bound by the product's minimum.
       if (
@@ -1042,14 +1055,14 @@ export class Engine {
         (dec(size) < dec(p.quote_min_size) ||
           Number(size) / q.ask < Number(p.base_min_size))
       )
-        throw Error("Below product minimum");
+        throw refuse("Below product minimum");
       if (p.quote_max_size && dec(size) > dec(p.quote_max_size))
-        throw Error("Above product maximum");
+        throw refuse("Above product maximum");
     } else {
       const held = Array.isArray(bot.positions)
         ? bot.positions.find((x) => x.product === product)
         : null;
-      if (!held) throw Error("Position changed while decision was pending");
+      if (!held) throw refuse("Position changed while decision was pending");
       // A paper fill is simulated locally, so the exchange lot size does not
       // apply either: sell the full held quantity, even a sub-lot remainder.
       size = step(held.quantity, p.base_increment);
@@ -1064,7 +1077,7 @@ export class Engine {
           "Residual holding below exchange minimum; needs owner review",
         );
       if (dec(size) > dec(balances?.[product.split("-")[0]] ?? "0") && !paper)
-        throw Error("Insufficient exchange asset balance");
+        throw refuse("Insufficient exchange asset balance");
     }
     if (this.stopped) return;
     // Recheck freshness after private API reads and immediately before reserving/submitting.
@@ -1072,14 +1085,14 @@ export class Engine {
       side === "BUY" &&
       Date.now() - evidence.at > this.config.maxAnalysisAgeMs
     )
-      throw Error("Entry evidence expired");
+      throw refuse("Entry evidence expired");
     const freshQuote = await this.market.quote(product);
     if (
       side === "BUY" &&
       !evidence.control &&
       !eligibility(id, { ...evidence, ...freshQuote }, rules)
     )
-      throw Error("Entry changed during validation");
+      throw refuse("Entry changed during validation");
     if (side === "BUY" && policy) {
       const checked = executionPlan(
         evidence,
@@ -1096,7 +1109,7 @@ export class Engine {
         (dec(size) < dec(p.quote_min_size) ||
           Number(size) / freshQuote.ask < Number(p.base_min_size))
       )
-        throw Error("Risk-sized order below product minimum");
+        throw refuse("Risk-sized order below product minimum");
       policy = checked;
     }
     const order = this.store.reserve({
@@ -1237,12 +1250,17 @@ export class Engine {
             }
             this.setError(`protection:${id}`, null);
           } catch (e) {
-            this.setError(`protection:${id}`, e.message);
-            this.store.event("error", {
-              bot: id,
-              component: "protection",
-              message: e.message,
-            });
+            if (isRefusal(e)) {
+              this.store.event("veto", { bot: id, reason: e.message });
+              this.setError(`protection:${id}`, null);
+            } else {
+              this.setError(`protection:${id}`, e.message);
+              this.store.event("error", {
+                bot: id,
+                component: "protection",
+                message: e.message,
+              });
+            }
           }
         }
         this.lastProtection = Date.now();

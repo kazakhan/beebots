@@ -14,6 +14,43 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.0.4] - 2026-10-01 - Expected refusals are logged as vetoes, not errors
+
+`"Depth impact exceeds risk budget"` and the other risk/market declines are the
+engine correctly refusing a trade, but `execute` threw them as plain errors and
+the per-bot catch logged them as red `error` events - so ordinary refusals read
+as failures.
+
+### Changed
+
+- **A `Refusal` is a decline, not a fault.** New `src/refusal.mjs`; the risk
+  layer (`strategy-v2.executionPlan`: depth impact, execution cost, risk distance,
+  insufficient depth) and the expected `execute` declines (`entry no longer
+qualifies`, `entry changed/expired`, `position limit`, `holds this pair`,
+  `position changed`, `insufficient cash/asset`, `below/above product minimum`,
+  `risk-sized below minimum`) now throw it. Genuine faults and owner-action
+  conditions (identity mismatch, regressed totals, unavailable fee rate,
+  `residual holding below exchange minimum; needs owner review`) stay plain
+  errors.
+- The engine's per-bot, control-arm and protection catches log a **`veto`** for a
+  refusal (and clear the status) instead of an `error`.
+- The dashboard tints **vetoes amber** and **errors red** (previously both red),
+  and the Decision Stream filter gains **Vetoes** and **Errors** options.
+
+### Verification
+
+- 217 Node tests pass (`npm test`), up from 213: `isRefusal` classification,
+  `executionPlan` refusals, an engine refusal logged as a veto (not an error),
+  and a genuine fault still logged as an error.
+
+### Note
+
+This changes reporting only; the risk guard is unchanged. To let a specific bot
+take trades the depth check declines, raise `riskPct` or `maxCostRisk` for it in
+`config.json` - not the guard.
+
+---
+
 ## [3.0.3] - 2026-10-01 - Exact paper fills; reset-control clears a sticky halt
 
 Root cause of the repeated `"Exchange buy value exceeded requested quote size"`

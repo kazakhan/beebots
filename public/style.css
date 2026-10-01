@@ -1644,6 +1644,10 @@ select:hover {
   background: color-mix(in srgb, var(--green) 8%, transparent);
 }
 .event.is-veto {
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+}
+.event.is-error {
   border-left-color: var(--red);
   background: color-mix(in srgb, var(--red) 9%, transparent);
 }

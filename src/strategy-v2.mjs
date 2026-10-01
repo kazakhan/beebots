@@ -1,4 +1,5 @@
 // Closed-bar strategy rules; all lookbacks exclude the bar being evaluated.
+import { refuse } from "./refusal.mjs";
 export const VERSION = "2.0.0";
 export const defaults = {
   breakout: {
@@ -286,14 +287,14 @@ export function walk(levels, quantity) {
     if (remaining <= quantity * 1e-12) break;
   }
   if (remaining > quantity * 1e-10)
-    throw Error("Insufficient order-book depth");
+    throw refuse("Insufficient order-book depth");
   return value / quantity;
 }
 export function executionPlan(f, q, cash, fee, rules) {
   const riskBudget = (cash * rules.riskPct) / 100;
   const distance = q.ask - f.stopPrice;
   if (!(distance > 0 && riskBudget > 0))
-    throw Error("Invalid strategy risk distance");
+    throw refuse("Invalid strategy risk distance");
   const quantity = Math.min(
     (cash * rules.tradeFraction) / (q.ask * (1 + fee + 0.001)),
     riskBudget / (distance + 2 * fee * q.ask),
@@ -305,9 +306,9 @@ export function executionPlan(f, q, cash, fee, rules) {
     (buy - q.ask + 2 * (q.bid - sell) + (q.ask - q.bid) + 2 * fee * buy);
   const risk = quantity * (buy - f.stopPrice);
   if (cost > risk * rules.maxCostRisk)
-    throw Error("Execution costs exceed strategy risk allowance");
+    throw refuse("Execution costs exceed strategy risk allowance");
   if (risk + quantity * 2 * fee * buy > riskBudget * 1.001)
-    throw Error("Depth impact exceeds risk budget");
+    throw refuse("Depth impact exceeds risk budget");
   return {
     quote: quantity * q.ask,
     quantity,

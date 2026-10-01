@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/store.mjs";
 import { Engine } from "../src/engine.mjs";
+import { Refusal } from "../src/refusal.mjs";
 import { config } from "./helpers.mjs";
 
 // One bot cycle per engine, with every component stubbed. Proves the dispatch:
@@ -289,5 +290,54 @@ test("a held product outside the strategy universe is still reviewed", async () 
     a.candidates.some((c) => c.product === "ZZZ-USDC"),
   );
   assert.ok(reviewed, "the held product reached the model");
+  s.close();
+});
+
+// --- refusals are vetoes, not errors (3.0.4) ------------------------------
+test("an expected refusal is logged as a veto, not an error", async () => {
+  const { s, engine } = fixture({ engine: "laya+llm" });
+  engine.execute = async () => {
+    throw new Refusal("Depth impact exceeds risk budget");
+  };
+  engine.model.decide = async () => ({
+    action: "BUY",
+    product: "AAA-USDC",
+    reason: "enter",
+    model: "m",
+    provider: null,
+  });
+  await engine.cycle();
+  const rows = s.db.prepare("SELECT kind,body FROM events").all();
+  assert.ok(
+    rows.some((r) => r.kind === "veto" && r.body.includes("Depth impact")),
+    "the refusal is a veto",
+  );
+  assert.equal(
+    rows.filter((r) => r.kind === "error" && r.body.includes("Depth impact"))
+      .length,
+    0,
+    "the refusal is not an error",
+  );
+  s.close();
+});
+
+test("a genuine fault is still logged as an error", async () => {
+  const { s, engine } = fixture({ engine: "laya+llm" });
+  engine.execute = async () => {
+    throw Error("ledger corrupted");
+  };
+  engine.model.decide = async () => ({
+    action: "BUY",
+    product: "AAA-USDC",
+    reason: "enter",
+    model: "m",
+    provider: null,
+  });
+  await engine.cycle();
+  const rows = s.db.prepare("SELECT kind,body FROM events").all();
+  assert.ok(
+    rows.some((r) => r.kind === "error" && r.body.includes("ledger corrupted")),
+    "a fault is an error",
+  );
   s.close();
 });
