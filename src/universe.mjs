@@ -85,6 +85,17 @@ export function discover(products, overrides = {}, categories = []) {
     )
       reason = "Unavailable for account/market";
     else if (p.limit_only || p.post_only) reason = "Order type unsupported";
+    // A product can be listed but not actually tradeable: Coinbase returns
+    // USDC products with missing lot/precision metadata that no order can use.
+    // assertTradable enforces the same four fields at submit time; excluding
+    // them here keeps the discovered universe equal to what can be bought.
+    else if (!(
+      Number(p.base_increment) > 0 &&
+      Number(p.quote_increment) > 0 &&
+      Number(p.base_min_size) > 0 &&
+      Number(p.quote_min_size) > 0
+    ))
+      reason = "Sizing metadata missing";
     else if (
       category.category === "stablecoin" ||
       category.category === "excluded"

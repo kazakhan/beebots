@@ -1,6 +1,6 @@
 {
   "name": "beebots-coinbase-laya",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,8 @@
     "check": "node src/check.mjs",
     "password": "node src/password.mjs",
     "demo": "node src/demo.mjs",
-    "vacuum": "node src/vacuum.mjs"
+    "vacuum": "node src/vacuum.mjs",
+    "reset-control": "node src/reset-control.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.55.1",

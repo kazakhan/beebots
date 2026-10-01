@@ -285,3 +285,60 @@ test("a configured bot absent from the ledger cannot be dereferenced defensively
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- paper arms are not bound by exchange minimums (3.0.1) ----------------
+// A paper position that is dust can never be closed through the exchange, but a
+// simulated arm has no exchange to satisfy. Before 3.0.1 the minimum check was
+// applied to paper too, so the control stranded its own dust.
+function dustFixture(paper) {
+  const f = fixture({ paper, maxPositions: 1 });
+  // A position worth less than the product's 1 USDC quote minimum.
+  f.s.change((st) => {
+    st.bots.control.cash = "99.5";
+    st.bots.control.positions = [
+      { product: "A-USDC", quantity: "0.005", cost: "0.5", opened: Date.now() },
+    ];
+  });
+  // The model asks to close it.
+  f.engine.model.decide = async () => ({
+    action: "SELL",
+    product: "A-USDC",
+    reason: "exit dust",
+    model: "m",
+    provider: null,
+  });
+  // A paper SELL needs the taker fee; the subsequent random BUY is what we want
+  // to block, so fail on the second fee call only. For a real arm the SELL needs
+  // no fee and the position stays at capacity, so no entry is attempted.
+  if (paper) {
+    let feeCalls = 0;
+    f.engine.exchange.fees = async () => {
+      feeCalls++;
+      if (feeCalls > 1) throw Error("entries disabled for test");
+      return { fee_tier: { taker_fee_rate: "0.001" } };
+    };
+  }
+  return f;
+}
+
+test("a paper arm closes a below-minimum holding", async () => {
+  const f = dustFixture(true);
+  await f.tick();
+  assert.equal(
+    f.s.read().bots.control.positions.length,
+    0,
+    "the paper arm cleared its dust",
+  );
+  f.s.close();
+});
+
+test("a real arm refuses a below-minimum holding for owner review", async () => {
+  const f = dustFixture(false);
+  await f.tick();
+  assert.equal(
+    f.s.read().bots.control.positions.length,
+    1,
+    "the real arm keeps dust for owner review",
+  );
+  f.s.close();
+});

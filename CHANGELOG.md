@@ -14,6 +14,46 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.0.1] - 2026-10-01 - Paper arms close their own dust; discovery excludes untradeable pairs
+
+Fixes the stuck control arm and the blank Dice balance seen live.
+
+### Fixed
+
+- **A paper arm is no longer bound by exchange minimums.** The BUY/SELL
+  minimum-size checks (`base_min_size` / `quote_min_size`) now apply only to a
+  real order. A paper position that is dust could never be closed - it threw
+  "Residual holding below exchange minimum; needs owner review" - even though
+  the simulated fill needs no exchange. It now closes, so the control cannot
+  strand its own positions.
+- **A held product outside the strategy universe is still reviewed.** The engine
+  now always searches the full collected snapshot for held rows, not just the
+  strategy universe and not only for legacy positions. A holding that dropped
+  out of the universe is quoted again, so it is valued (the Dice card shows its
+  balance instead of "—") and can be exited.
+- **Discovery excludes listed-but-untradeable products.** `discover()` now
+  requires real lot/precision metadata (`base_increment`, `quote_increment`,
+  `base_min_size`, `quote_min_size`) - the same fields `assertTradable` enforces
+  at submit time. Some Coinbase USDC products are returned online but carry no
+  usable sizing, so no order can be placed; they no longer enter the tradable
+  universe or show as eligible in Market coverage.
+
+### Added
+
+- **`npm run reset-control`** (`src/reset-control.mjs`): with the service
+  stopped, clears a stuck PAPER control arm by refunding each position at its
+  recorded cost and emptying the book. It refuses to run on a real control arm
+  or while the runtime holds the ledger lock. The pure logic lives in
+  `src/control-reset.mjs`.
+
+### Verification
+
+- 206 Node tests pass (`npm test`), up from 199: discovery sizing-metadata
+  exclusions, the paper-vs-real minimum behaviour, the held-outside-universe
+  review, and the control reset.
+
+---
+
 ## [3.0.0] - 2026-10-01 - Public dashboard with owner login, Jev spend card, per-bot paper
 
 The dashboard is now public: the page, its assets and the read-only feeds are

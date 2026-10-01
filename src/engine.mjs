@@ -24,7 +24,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.0.0";
+const BUILD = "3.0.1";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -376,7 +376,10 @@ export class Engine {
           // is reviewed from the generic feature rows on the fast cadence.
           const legacyPosition = v2 && positions.some((p) => !p.policy);
           const available = v2 ? this.market.snapshot(id) : null;
-          const generic = v2 && legacyPosition ? this.market.snapshot() : [];
+          // The full collected snapshot always, so a held product is found,
+          // quoted and valued even if it has dropped out of the strategy
+          // universe. Held rows only; fresh entries still come from `available`.
+          const generic = v2 ? this.market.snapshot() : [];
           const reviewable = [...(available ?? []), ...generic];
           if (v2) {
             const interval = legacyPosition
@@ -1013,9 +1016,12 @@ export class Engine {
         .reduce((n, b2) => n + dec(b2.reserved), 0n);
       if (!paper && dec(reserve) > dec(balances.USDC ?? "0") - totalReserved)
         throw Error("Insufficient unreserved exchange cash");
+      // A paper arm has no exchange to satisfy, so it may open any simulated
+      // size; only a real order is bound by the product's minimum.
       if (
-        dec(size) < dec(p.quote_min_size) ||
-        Number(size) / q.ask < Number(p.base_min_size)
+        !paper &&
+        (dec(size) < dec(p.quote_min_size) ||
+          Number(size) / q.ask < Number(p.base_min_size))
       )
         throw Error("Below product minimum");
       if (p.quote_max_size && dec(size) > dec(p.quote_max_size))
@@ -1026,9 +1032,12 @@ export class Engine {
         : null;
       if (!held) throw Error("Position changed while decision was pending");
       size = floorStep(held.quantity, p.base_increment);
+      // Only a real order is bound by the exchange minimum. A paper arm can
+      // always close its own simulated dust, so it cannot strand a position.
       if (
-        dec(size) < dec(p.base_min_size) ||
-        Number(size) * q.bid < Number(p.quote_min_size)
+        !paper &&
+        (dec(size) < dec(p.base_min_size) ||
+          Number(size) * q.bid < Number(p.quote_min_size))
       )
         throw Error(
           "Residual holding below exchange minimum; needs owner review",
@@ -1062,8 +1071,9 @@ export class Engine {
       if (dec(bounded) < dec(size)) size = bounded;
       reserve = add(size, mul(size, add(takerFee, "0.001")));
       if (
-        dec(size) < dec(p.quote_min_size) ||
-        Number(size) / freshQuote.ask < Number(p.base_min_size)
+        !paper &&
+        (dec(size) < dec(p.quote_min_size) ||
+          Number(size) / freshQuote.ask < Number(p.base_min_size))
       )
         throw Error("Risk-sized order below product minimum");
       policy = checked;

@@ -248,3 +248,46 @@ test("the Jev daily cap is restored from the ledger on construction", () => {
   assert.equal(jevStub.spentTodayUsd, 1.5, "1.5 USD restored");
   s.close();
 });
+
+// --- held products outside the strategy universe (3.0.1) ------------------
+// A held product that has dropped out of the strategy universe must still be
+// reviewed, quoted and valued; otherwise it is unmanageable and its bot cannot
+// be marked. The full collected snapshot is the fallback.
+test("a held product outside the strategy universe is still reviewed", async () => {
+  const { s, engine, seen } = fixture({ engine: "laya+llm" });
+  const row = (product) => ({
+    product,
+    category: "meme",
+    strategyVersion: "2.0.0",
+    setupEligible: true,
+    signalTime: Math.floor(Date.now() / 300000) * 300000,
+    at: Date.now(),
+    close: 101,
+    channelHigh: 100.5,
+    stopPrice: 95,
+    maxEntry: 103,
+    atr: 1,
+    rankScore: 1,
+  });
+  // The strategy universe lists only AAA; the full snapshot also holds ZZZ.
+  engine.market.snapshot = (id) =>
+    id ? [row("AAA-USDC")] : [row("AAA-USDC"), row("ZZZ-USDC")];
+  engine.market.quote = async () => ({
+    bid: 100.99,
+    ask: 101,
+    at: Date.now(),
+    bids: [{ price: "100.99", size: "1000" }],
+    asks: [{ price: "101", size: "1000" }],
+  });
+  s.change((st) => {
+    st.bots.breakout.positions = [
+      { product: "ZZZ-USDC", quantity: "1", cost: "100", opened: Date.now() },
+    ];
+  });
+  await engine.cycle();
+  const reviewed = seen.model.some((a) =>
+    a.candidates.some((c) => c.product === "ZZZ-USDC"),
+  );
+  assert.ok(reviewed, "the held product reached the model");
+  s.close();
+});

@@ -46,7 +46,8 @@ the login is remembered for the browser tab. Set the credentials with
 `config.example.json` ships the strategy bots as `paper: true`, so a fresh
 install trades a simulated ledger on live prices. Real orders additionally
 require `mode: "live"` and the explicit acknowledgement; a paper bot never
-touches the exchange.
+touches the exchange. If a paper control arm strands simulated dust whose market
+is gone, clear it with `npm run reset-control` while the service is stopped.
 
 > **This can trade real money.** With `mode: "live"` and a bot set to
 > `paper: false`, it submits live market orders on Coinbase. It is not investment

@@ -325,6 +325,12 @@ const product = (id, name, extra = {}) => ({
   quote_currency_id: "USDC",
   product_type: "SPOT",
   status: "online",
+  // Real order sizing, so these count as tradeable under the 3.0.1 discovery
+  // check (universe.test.mjs covers the missing-metadata case).
+  base_increment: "0.01",
+  quote_increment: "0.01",
+  base_min_size: "1",
+  quote_min_size: "1",
   ...extra,
 });
 const bar = (i, close = 100) => ({
