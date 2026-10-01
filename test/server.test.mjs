@@ -279,15 +279,32 @@ test("an oversized settings body is refused", async () => {
     await f.close();
   }
 });
-test("HTML, API and SSE all require authentication", async () => {
+test("the page and read-only feeds are public; settings need auth", async () => {
   const f = await fixture();
   try {
-    for (const path of ["", "api/state", "api/events", "app.js"]) {
+    // Public: served to anyone, with no browser auth challenge.
+    for (const path of ["", "app.js", "style.css", "theme.js", "api/state"]) {
       const r = await fetch(f.url + path);
-      assert.equal(r.status, 401);
+      assert.equal(r.status, 200, `${path} must be public`);
+      assert.equal(
+        r.headers.get("www-authenticate"),
+        null,
+        `${path} must not prompt for auth`,
+      );
     }
-    assert.equal((await fetch(f.url, { headers })).status, 200);
-    assert.equal((await fetch(f.url + "api/state", { headers })).status, 200);
+    // SSE is public too (EventSource cannot send credentials); cancel at once.
+    const ac = new AbortController();
+    const sse = await fetch(f.url + "api/events", { signal: ac.signal });
+    assert.equal(sse.status, 200);
+    ac.abort();
+    // Protected: settings require the owner login.
+    const denied = await fetch(f.url + "api/settings");
+    assert.equal(denied.status, 401);
+    assert.equal(denied.headers.get("www-authenticate"), null);
+    assert.equal(
+      (await fetch(f.url + "api/settings", { headers })).status,
+      200,
+    );
   } finally {
     await f.close();
   }

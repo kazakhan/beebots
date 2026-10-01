@@ -17,6 +17,10 @@ export function config() {
     allowNoKey: true,
   };
   for (const b of Object.values(c.bots)) b.capital = "100";
+  // config.example.json ships the strategy bots as paper (the 3.0 default for a
+  // fresh install). These suites exercise the real-adapter path, so clear the
+  // flag here; paper tests add it back explicitly.
+  for (const id of ["breakout", "trend", "momentum"]) delete c.bots[id].paper;
   // A Coinbase credential source is required by config validation; tests never
   // reach the exchange, so a placeholder absolute path is enough.
   c.coinbaseKeyFile = "/tmp/beebots-test-coinbase-key.json";

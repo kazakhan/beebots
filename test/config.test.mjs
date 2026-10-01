@@ -39,10 +39,7 @@ test("a Coinbase credential source is required and must be unambiguous", () => {
     // Half a pair is refused.
     const half = { ...inline };
     delete half.coinbaseApiKeySecret;
-    assert.throws(
-      () => validate(half),
-      /must be set together/,
-    );
+    assert.throws(() => validate(half), /must be set together/);
     // The environment alone is enough.
     process.env.COINBASE_KEY_NAME = "env-name";
     process.env.COINBASE_KEY_SECRET = "env-secret";
@@ -69,4 +66,16 @@ test("a relative coinbaseKeyFile is rejected; layaEnabled must be boolean", () =
   const off = config();
   off.layaEnabled = false;
   assert.equal(validate(off), off);
+});
+
+test("per-bot real/paper must be boolean", () => {
+  const ok = config();
+  ok.bots.breakout.paper = true;
+  assert.equal(validate(ok), ok);
+  const off = config();
+  off.bots.momentum.paper = false;
+  assert.equal(validate(off), off);
+  const bad = config();
+  bad.bots.trend.paper = "yes";
+  assert.throws(() => validate(bad), /Invalid trend\.paper/);
 });

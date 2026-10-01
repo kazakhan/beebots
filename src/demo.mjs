@@ -15,9 +15,9 @@ const config = {
       salt + ":" + scryptSync("local-preview-only", salt, 64).toString("hex"),
   },
   bots: {
-    breakout: { name: "Scout", capital: "100", maxPositions: 3 },
-    trend: { name: "Keeper", capital: "100", maxPositions: 3 },
-    momentum: { name: "Spark", capital: "100", maxPositions: 3 },
+    breakout: { name: "Scout", capital: "100", maxPositions: 3, paper: true },
+    trend: { name: "Keeper", capital: "100", maxPositions: 3, paper: true },
+    momentum: { name: "Spark", capital: "100", maxPositions: 3, paper: true },
     control: { name: "Dice", capital: "100", maxPositions: 3, paper: true },
   },
 };
@@ -59,7 +59,7 @@ const engine = {
     strategyVersion: 2,
     // Matches the backend build the page expects, so the version-skew check does
     // not fire against the synthetic preview.
-    build: "2.10.0",
+    build: "3.0.0",
     // Synthetic free-model fixture: proves the cost line and provider-driven
     // labels render without any provider connection.
     modelUsage: {
@@ -77,6 +77,13 @@ const engine = {
           calls: 394,
           tokens: 1_284_400,
           costNanos: "0",
+        },
+        "jev:jev-1.13.0": {
+          provider: "jev",
+          model: "jev-1.13.0",
+          calls: 128,
+          tokens: 51_200,
+          costNanos: "2150400",
         },
       },
     },
@@ -149,32 +156,9 @@ const engine = {
       free: true,
       hasKey: true,
       keyEnv: "BEEBOTS_MODEL_KEY",
-      engine: "laya+llm",
-      engineLabel: "Laya + LLM",
-    },
-    // Mirrors settings.redacted() so the dialog renders the engine selector and
-    // the Jev section without a writable data directory.
-    modelConfig: {
-      provider: "zai",
-      model: "glm-4.7-flash",
-      source: "demo",
-      hasKey: true,
-      keyHint: "…demo",
-      keyEnv: "BEEBOTS_MODEL_KEY",
-      apiKeyEnv: "BEEBOTS_MODEL_KEY",
-      fallbackName: null,
-      endpoint: null,
-      defaultEndpoint: null,
-      engine: "laya+llm",
-      engineLabel: "Laya + LLM",
-      jev: {
-        model: "jev-1.13.0",
-        modelDefault: "jev-1.13.0",
-        hasKey: false,
-        keyHint: null,
-        keyEnv: "TYPESAFE_API_KEY",
-      },
-      unknownModel: null,
+      engine: "jev+llm",
+      engineLabel: "Jev + LLM",
+      jevCapUsd: 2,
     },
     coverage: {
       total: 410,

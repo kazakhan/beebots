@@ -1619,3 +1619,57 @@ select:hover {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ==========================================================================
+   3.0.0 - public dashboard, Jev spend card, row tints and scroll spacing.
+   ========================================================================== */
+
+/* The summary strip holds a sixth card when the engine uses Jev. */
+.summary-strip.has-jev {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+/* Decision-stream rows are tinted and edged by what they are. */
+.event {
+  border-left: 3px solid transparent;
+  padding-left: 9px;
+}
+.event.is-decision {
+  border-left-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+.event.is-order,
+.event.is-fill {
+  border-left-color: var(--green);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+.event.is-veto {
+  border-left-color: var(--red);
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+}
+.event.is-analysis {
+  border-left-color: var(--bee-trend);
+  background: color-mix(in srgb, var(--bee-trend) 8%, transparent);
+}
+.event.is-review {
+  border-left-color: var(--bee-control);
+  background: color-mix(in srgb, var(--bee-control) 8%, transparent);
+}
+.event.is-status {
+  border-left-color: var(--line);
+}
+
+/* Order-ledger rows: buys and sells read differently. */
+.order.order-buy {
+  background: color-mix(in srgb, var(--green) 7%, transparent);
+}
+.order.order-sell {
+  background: color-mix(in srgb, var(--gold) 7%, transparent);
+}
+
+/* Keep the P/L badge and the regime labels clear of the scrollbar. */
+.panels .orders,
+.panels .events,
+.panels #analysis {
+  padding-right: 10px;
+}

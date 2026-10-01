@@ -98,6 +98,8 @@ function fixture({ engine, jevResult, layaResult } = {}) {
           probabilities: { SKIP: 1 },
           confidence: 0.9,
           convictionRaw: 2,
+          inputTokens: 1000,
+          costUsd: 0.000042,
           model: "jev-1.13.0",
         }
       );
@@ -194,5 +196,55 @@ test("a failing Jev-only engine holds the bot and records the error", async () =
     true,
     "the failure is surfaced per bot",
   );
+  s.close();
+});
+
+test("a Jev decision is recorded in the day-scoped ledger", async () => {
+  const { s, engine } = fixture({ engine: "jev" });
+  await engine.cycle();
+  const u = s.normaliseUsage(s.read().modelUsage);
+  const rows = Object.values(u?.perModel ?? {}).filter(
+    (p) => p.provider === "jev",
+  );
+  assert.ok(rows.length, "a Jev row is written");
+  assert.ok(rows[0].calls >= 1, "the call is counted");
+  assert.ok(BigInt(rows[0].costNanos) > 0n, "the estimated cost is recorded");
+  assert.ok(rows[0].tokens >= 1000, "input tokens are recorded");
+  s.close();
+});
+
+test("the Jev daily cap is restored from the ledger on construction", () => {
+  const c = config();
+  c.mode = "live";
+  c.strategyVersion = 2;
+  const s = new Store(":memory:", c);
+  const day = new Date().toISOString().slice(0, 10);
+  s.recordModelCall({
+    day,
+    provider: "jev",
+    model: "jev-1.13.0",
+    usage: { promptTokens: 1000, totalTokens: 1000 },
+    costNanos: 1_500_000_000n,
+  });
+  const jevStub = {
+    spentTodayUsd: 0,
+    dailyUsdCap: 2,
+    decide: async () => ({ ok: false, reason: "backoff" }),
+  };
+  new Engine({
+    config: c,
+    store: s,
+    exchange: {},
+    market: {
+      refresh: async () => {},
+      snapshot: () => [],
+      prices: () => ({}),
+      quote: async () => ({}),
+    },
+    laya: {},
+    model: { resolve: () => ({}) },
+    jev: jevStub,
+  });
+  assert.equal(jevStub.spentTodayUsd, 1.5, "1.5 USD restored");
   s.close();
 });

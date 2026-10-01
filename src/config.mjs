@@ -216,6 +216,10 @@ export function validate(c) {
         b.maxPositions > 5)
     )
       throw Error(`Invalid ${id}.maxPositions`);
+    // Real or paper, per bot. Absent means the pre-3.0 default (real,
+    // subject to mode); config.example ships paper: true for a fresh install.
+    if (b.paper !== undefined && typeof b.paper !== "boolean")
+      throw Error(`Invalid ${id}.paper`);
     if (
       c.strategyVersion === 2 &&
       (!(b.riskPct > 0 && b.riskPct <= 5) ||

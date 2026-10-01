@@ -30,6 +30,7 @@
   "bots": {
     "breakout": {
       "name": "Scout",
+      "paper": true,
       "capital": "0",
       "tradeFraction": 0.9,
       "stopPct": 3,
@@ -43,6 +44,7 @@
     },
     "trend": {
       "name": "Keeper",
+      "paper": true,
       "capital": "0",
       "tradeFraction": 0.9,
       "stopPct": 4,
@@ -56,6 +58,7 @@
     },
     "momentum": {
       "name": "Spark",
+      "paper": true,
       "capital": "0",
       "tradeFraction": 0.9,
       "stopPct": 3,

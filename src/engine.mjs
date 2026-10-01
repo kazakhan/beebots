@@ -24,7 +24,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "2.10.0";
+const BUILD = "3.0.0";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -114,6 +114,8 @@ export class Engine {
     // provider/model switch is reflected in subsequent hashes.
     this.rulesForHash = () =>
       this.model.resolve?.()?.model ?? config.model.name;
+    // Seed the Jev daily cap from the ledger so a restart does not reset it.
+    if (this.jev) this.restoreJevSpend();
   }
   // Every configured bot, strategy and control alike. Used by the protective
   // loop and reporting, which are agnostic to how an entry was chosen.
@@ -213,7 +215,51 @@ export class Engine {
       // (which still runs the Trade Review even when it does not decide).
       engine,
       engineLabel: engineLabel(engine),
+      // The Jev daily USD cap, for the dashboard's Jev spend card. Null when the
+      // runtime has no Jev client.
+      jevCapUsd: this.jev ? Number(this.jev.dailyUsdCap) : null,
     };
+  }
+  // Restore today's Jev spend from the ledger at startup, so a restart does not
+  // silently reset the daily cap to zero.
+  restoreJevSpend() {
+    try {
+      const u = this.store.normaliseUsage(this.store.read().modelUsage ?? null);
+      const today = new Date().toISOString().slice(0, 10);
+      if (!u || u.day !== today) {
+        this.jev.spentTodayUsd = 0;
+        return;
+      }
+      const nanos = Object.values(u.perModel ?? {})
+        .filter((p) => p.provider === "jev")
+        .reduce((n, p) => n + BigInt(p.costNanos ?? 0), 0n);
+      this.jev.spentTodayUsd = Number(nanos) / 1e9;
+    } catch {
+      // Best effort; a bad ledger row must never stop the runtime starting.
+    }
+  }
+  // Persist one Jev call in the same day-scoped ledger as the LLM, so the
+  // dashboard can show a Jev spend card and the cap survives a restart. Usage
+  // accounting is telemetry: a failure is recorded and swallowed, never thrown
+  // into a decision path.
+  recordJevCall(read, day) {
+    try {
+      this.store.recordModelCall({
+        day,
+        provider: "jev",
+        model: read.model ?? "jev",
+        // Jev bills input tokens only; output is free.
+        usage: usageCounts({
+          prompt_tokens: read.inputTokens,
+          total_tokens: read.inputTokens,
+        }),
+        costNanos: BigInt(Math.round((Number(read.costUsd) || 0) * 1e9)),
+      });
+    } catch (e) {
+      this.store.event("status", {
+        message: `Jev usage not recorded: ${e.message}`,
+      });
+    }
   }
   async start() {
     this.market.start?.();
@@ -521,6 +567,7 @@ export class Engine {
                 convictionLabels: CONVICTION_LABELS,
               });
               if (read?.ok) {
+                this.recordJevCall(read, day);
                 const move = parseMove(read.choice);
                 evidence = {
                   engine: "jev",
@@ -593,6 +640,7 @@ export class Engine {
                 queueDepth: read.queue_depth,
                 at: Date.now(),
               };
+            else this.recordJevCall(read, day);
             const move = parseMove(read.choice);
             if (!move)
               throw Error(`${engineLabel(engine)} returned an off-menu move`);
@@ -1272,7 +1320,6 @@ export class Engine {
         };
       })(),
       model: this.modelInfo(),
-      modelConfig: this.settings?.redacted?.() ?? null,
       latestAnalyses: this.store.db
         .prepare(
           "SELECT id,ts,body FROM events WHERE kind='analysis' ORDER BY id DESC LIMIT 30",

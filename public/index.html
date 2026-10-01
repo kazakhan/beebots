@@ -59,7 +59,11 @@
           ><strong id="summary-calls">—</strong
           ><small id="summary-cost" title="Estimated provider cost today, USD"
             >—</small
-          ><small id="status">Waiting for authenticated feed</small>
+          ><small id="status">Waiting for the feed</small>
+        </div>
+        <div id="summary-jev-card" hidden>
+          <span>JEV SPEND</span><strong id="summary-jev-cost">—</strong
+          ><small id="summary-jev-meta">—</small>
         </div>
       </section>
       <div id="alert" role="status" hidden></div>
@@ -208,12 +212,48 @@
           <button id="settings-save" type="button">Save selection</button>
           <button id="settings-test" type="button">Test connection</button>
           <button id="settings-refresh" type="button">Refresh models</button>
+          <button id="settings-logout" type="button">Log out</button>
         </div>
         <p class="note" id="settings-result"></p>
         <details>
           <summary>Today by model</summary>
           <div id="settings-usage"></div>
         </details>
+      </div>
+    </dialog>
+    <!-- Owner login. The dashboard is public; this gates settings and the
+         pause control only. -->
+    <dialog
+      id="login-dialog"
+      class="model-dialog"
+      aria-labelledby="login-title"
+    >
+      <form method="dialog" class="dialog-head">
+        <h2 id="login-title">Owner login</h2>
+        <button class="dialog-close" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="settings-body">
+        <p class="note">
+          This dashboard is public. Sign in to change settings or pause entries.
+          Credentials are kept for this browser tab only.
+        </p>
+        <label
+          >Username<input
+            id="login-user"
+            type="text"
+            autocomplete="username"
+            spellcheck="false"
+        /></label>
+        <label
+          >Password<input
+            id="login-pass"
+            type="password"
+            autocomplete="current-password"
+        /></label>
+        <div class="settings-actions">
+          <button id="login-submit" type="button">Sign in</button>
+        </div>
+        <p class="note" id="login-error"></p>
       </div>
     </dialog>
     <script src="app.js" type="module"></script>

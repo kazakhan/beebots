@@ -93,14 +93,19 @@ export function createServer({
       res.end(JSON.stringify(data));
     };
     try {
-      if (!(await authorised(req))) {
-        res.setHeader(
-          "WWW-Authenticate",
-          'Basic realm="BeeBots", charset="UTF-8"',
-        );
-        return json(401, { error: "Authentication required" });
-      }
       const path = new URL(req.url, "http://localhost").pathname;
+      // The dashboard is public: the page, its assets and the read-only feeds
+      // need no credentials, so anyone can watch. Only the settings and the
+      // control actions require the owner login. A 401 is returned as JSON with
+      // no WWW-Authenticate header, so the browser never shows its native
+      // prompt; the page's own login dialog handles it.
+      const isPublic =
+        req.method === "GET" &&
+        ["", "app.js", "style.css", "theme.js", "api/state", "api/events"]
+          .map((p) => config.basePath + p)
+          .includes(path);
+      if (!isPublic && !(await authorised(req)))
+        return json(401, { error: "Authentication required" });
       if (path === config.basePath + "api/state" && req.method === "GET")
         return json(200, engine.snapshot());
       if (path === config.basePath + "api/events" && req.method === "GET") {

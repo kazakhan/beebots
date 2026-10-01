@@ -37,10 +37,22 @@ engine**:
 It does not load the upstream futures engine, forced-entry rules, Hive uploader
 or portraits.
 
-> **This trades real money.** It submits live market orders on Coinbase. It is
-> not investment advice, comes with no warranty, and the shipped strategy
-> parameters are unproven starting points rather than backtested promises. Run it
-> in `mode: "observe"` first, fund small, and read `deploy/INSTALL.md` before
+**Access.** The dashboard and its live feed are public; anyone can watch. The
+gear opens an **owner login** that gates the settings and the pause control, and
+the login is remembered for the browser tab. Set the credentials with
+`npm run password` (see `deploy/INSTALL.md`).
+
+**Money mode.** Each bot is real or paper per its `paper` flag, and
+`config.example.json` ships the strategy bots as `paper: true`, so a fresh
+install trades a simulated ledger on live prices. Real orders additionally
+require `mode: "live"` and the explicit acknowledgement; a paper bot never
+touches the exchange.
+
+> **This can trade real money.** With `mode: "live"` and a bot set to
+> `paper: false`, it submits live market orders on Coinbase. It is not investment
+> advice, comes with no warranty, and the shipped strategy parameters are
+> unproven starting points rather than backtested promises. Run it in
+> `mode: "observe"` first, fund small, and read `deploy/INSTALL.md` before
 > enabling live orders. You are responsible for every order it places.
 
 ## Getting started

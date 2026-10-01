@@ -14,6 +14,57 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.0.0] - 2026-10-01 - Public dashboard with owner login, Jev spend card, per-bot paper
+
+The dashboard is now public: the page, its assets and the read-only feeds are
+served without credentials, and the gear opens an owner login that gates the
+settings and the pause control. This changes the deployment and security
+contract, hence a major bump.
+
+### Added
+
+- **Jev spend.** Jev usage is recorded in the same day-scoped ledger as the LLM
+  (provider `jev`, billed on input tokens), the daily cap is restored from the
+  ledger on restart, and a **Jev spend** summary card appears next to the model
+  card whenever the engine uses Jev (`Jev` or `Jev + LLM`) - matching the
+  upstream counter: today's spend to four decimals with the cap and call count
+  beneath. The model card now shows the LLM only, so the two never double-count.
+- **Owner login.** The page and the SSE feed are public; `api/settings*` and
+  `api/entries` require the owner login. The gear opens a login dialog when
+  signed out and the settings dialog as before when signed in; credentials are
+  kept for the browser tab (`sessionStorage`) with a **Log out** button. A 401
+  is JSON with no `WWW-Authenticate`, so the browser never shows its native
+  prompt.
+- **Per-bot real/paper.** `paper` is now validated as a boolean on every bot,
+  not only the control.
+
+### Changed
+
+- **Decision stream and order ledger are colour-coded.** Each event row carries
+  a tint and a left edge by kind (decision = gold, order/fill = green,
+  veto/error = red, analysis = violet, review = teal, status = muted); orders
+  are tinted green for buys and amber for sells.
+- **REALISED P/L** is green when ahead and red when behind.
+- The summary strip's scrolling panels gained a right gutter so the P/L badge
+  and the Laya regime labels clear the scrollbar.
+- The summary strip aggregates the strategy bots and excludes only the paper
+  control arm, so a paper-first install still shows equity.
+- `config.example.json` ships the strategy bots as `paper: true` (a fresh
+  install is paper). The runtime default for an absent field is unchanged, and
+  the live config is not touched.
+- `modelConfig` is no longer in the public `api/state` payload; the settings
+  dialog reads its redacted selection from the authenticated `api/settings`.
+
+### Verification
+
+- 199 Node tests pass (`npm test`), up from 196: the server auth test now covers
+  the public/protected split, and new tests cover Jev ledger recording, cap
+  restore, and per-bot `paper` validation.
+- Playwright is not installed, so the login flow and the visual result are
+  verified with `npm run demo` in a browser.
+
+---
+
 ## [2.10.0] - 2026-10-01 - Look and feel: beebots.tech styling and light/dark themes
 
 The layout is unchanged. The dashboard now wears the visual language of the
