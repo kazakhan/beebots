@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.2.1";
+const EXPECTED_BUILD = "3.2.2";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -447,7 +447,7 @@ function render(s) {
         Object.entries(c.bots ?? {})
           .map(
             ([id, b]) =>
-              `<details><summary>${esc(id)} · ${b.evaluated} evaluated · ${b.eligible} eligible setups</summary>${b.shortlist.map((f) => `<p><b>${esc(f.product)}</b> · ${f.eligible ? "Setup eligible" : esc(f.reasons.join("; "))}${f.relativeVolume !== undefined ? " · relative volume " + Number(f.relativeVolume).toFixed(2) + "×" : ""}${f.rankPercentile !== undefined ? " · strength percentile " + (100 * f.rankPercentile).toFixed(0) : ""}</p>`).join("") || "<p>No candidates with complete evidence.</p>"}</details>`,
+              `<details><summary>${esc(id)} · ${b.evaluated} evaluated · ${b.eligible} eligible setups${b.warming ? ` · ${b.warming} warming` : ""}${b.rejected ? ` · ${b.rejected} rejected${b.note ? " (" + esc(b.note) + ")" : ""}` : ""}</summary>${b.shortlist.map((f) => `<p><b>${esc(f.product)}</b> · ${f.eligible ? "Setup eligible" : esc((f.reasons || []).join("; "))}${f.relativeVolume !== undefined ? " · relative volume " + Number(f.relativeVolume).toFixed(2) + "×" : ""}${f.rankPercentile !== undefined ? " · strength percentile " + (100 * f.rankPercentile).toFixed(0) : ""}</p>`).join("") || "<p>No candidates with complete evidence.</p>"}</details>`,
           )
           .join("");
     }

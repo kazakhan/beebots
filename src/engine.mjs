@@ -31,7 +31,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.2.1";
+const BUILD = "3.2.2";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -446,12 +446,45 @@ export class Engine {
             const interval = cadence >= 30000 ? cadence : runtime.cadenceMs;
             const bucket = Math.floor(Date.now() / interval);
             if (this.store.read().assessments?.[id] === bucket) continue;
-            // No cadence stamp while the universe or any held asset is warming.
-            if (
-              !available.length ||
-              heldProducts.some((p) => !reviewable.some((f) => f.product === p))
-            )
+            // No strategy snapshot yet: do NOT consume the cadence (a later
+            // cycle in the same bucket must still get a valid assessment), but
+            // record a visible SKIP once per bucket so the bot is never
+            // invisible in the decision stream.
+            if (!available.length) {
+              this.skipLog ??= new Map();
+              if (this.skipLog.get(id) !== bucket) {
+                this.skipLog.set(id, bucket);
+                const decision = {
+                  action: positions.length ? "HOLD" : "SKIP",
+                  reason: "No market read yet (strategy warming)",
+                  source: "strategy rules",
+                  at: Date.now(),
+                };
+                this.store.change(
+                  (s) => {
+                    s.bots[id].lastDecision = decision;
+                  },
+                  "decision",
+                  { bot: id, ...decision },
+                );
+              }
               continue;
+            }
+            // A held asset with no market read is a real gap: retry next cycle
+            // (leave the cadence unstamped) and surface it once per bucket.
+            if (
+              heldProducts.some((p) => !reviewable.some((f) => f.product === p))
+            ) {
+              this.skipLog ??= new Map();
+              if (this.skipLog.get(id) !== bucket) {
+                this.skipLog.set(id, bucket);
+                this.store.event("status", {
+                  bot: id,
+                  message: "Held asset has no market read; waiting to warm",
+                });
+              }
+              continue;
+            }
             this.store.change((s) => {
               s.assessments ??= {};
               s.assessments[id] = bucket;
@@ -471,17 +504,10 @@ export class Engine {
               1,
               Number(rules.maxCandidates) || runtime.maxCandidates,
             );
-            const cats = Array.isArray(rules.categories)
-              ? rules.categories
-              : runtime.scoutCategories;
             const fresh = atCapacity
               ? []
               : available
-                  .filter(
-                    (f) =>
-                      !heldProducts.includes(f.product) &&
-                      (id !== "breakout" || cats.includes(f.category)),
-                  )
+                  .filter((f) => !heldProducts.includes(f.product))
                   .slice(0, cap);
             candidates = [...held, ...fresh];
           } else {
@@ -545,9 +571,15 @@ export class Engine {
             candidates = fresh;
           }
           if (!candidates.length) {
+            // Always record something, so a bot is never invisible. Say why.
+            const markets = v2
+              ? available.length
+              : this.market.snapshot().length;
             const decision = {
               action: positions.length ? "HOLD" : "SKIP",
-              reason: "No complete qualifying market snapshot",
+              reason: markets
+                ? `No qualifying setup among ${markets} market read${markets === 1 ? "" : "s"}`
+                : "No market read yet (strategy warming)",
               source: "strategy rules",
               at: Date.now(),
             };

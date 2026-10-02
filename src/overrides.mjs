@@ -47,6 +47,7 @@ export const PARAM_SCHEMA = {
   trailActivationPct: { min: 0.5, max: 30 },
   maxHoldHours: { min: 0, max: 168, int: true },
   cadenceMs: { min: 30000, max: 3600000, int: true },
+  minSignalBars: { min: 2, max: 300, int: true },
   maxCandidates: { min: 1, max: 50, int: true },
   timeframe: { enum: ["5m", "15m", "1h"] },
   categories: { list: ["meme", "speculative", "unclassified"] },

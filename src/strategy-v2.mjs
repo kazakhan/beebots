@@ -22,6 +22,7 @@ export const defaults = {
     // the override schema). Scout scans every tradeable market, meme and new
     // listings ranked first.
     timeframe: "5m",
+    minSignalBars: 120,
     cadenceMs: 300000,
     maxCandidates: 25,
     categories: ["meme", "speculative", "unclassified"],
@@ -35,6 +36,7 @@ export const defaults = {
     trailR: 2,
     // Keeper is a day trader: a 15-minute signal on the 4-hour trend context.
     timeframe: "15m",
+    minSignalBars: 60,
     cadenceMs: 300000,
     maxCandidates: 25,
   },
@@ -46,6 +48,7 @@ export const defaults = {
     trailAtr: 2.5,
     trailR: 2,
     timeframe: "15m",
+    minSignalBars: 4,
     cadenceMs: 300000,
     maxCandidates: 25,
   },
@@ -127,8 +130,11 @@ export function evaluate(id, frames, rules, membership) {
     if (!condition) f.reasons.push(reason);
   };
   if (id === "breakout") {
-    if (bars.length < 200)
-      throw Error("Scout requires 200 completed signal bars");
+    const minBars = Number(r.minSignalBars) || 120;
+    if (bars.length < minBars)
+      throw Error(
+        `Scout signal history warming (${bars.length}/${minBars} bars)`,
+      );
     const range = prior.slice(-r.rangeBars),
       a = atr(prior),
       vols = range.map((x) => x.volume);
@@ -158,7 +164,7 @@ export function evaluate(id, frames, rules, membership) {
     f.maxEntry = f.channelHigh + r.maxExtensionAtr * a;
     f.rankScore = close / f.channelHigh;
   } else if (id === "trend") {
-    if (ctx.length < 250 || bars.length < 60)
+    if (ctx.length < 250 || bars.length < (Number(r.minSignalBars) || 60))
       throw Error("Keeper context history warming");
     const prices = ctx.map((x) => x.close),
       hp = prior.map((x) => x.close),
@@ -207,7 +213,7 @@ export function evaluate(id, frames, rules, membership) {
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = f.ema20 / f.ema50;
   } else {
-    if (h.length < 200 || bars.length < 4)
+    if (h.length < 200 || bars.length < (Number(r.minSignalBars) || 4))
       throw Error("Spark seven-day history warming");
     const hp = h.map((x) => x.close);
     f.atr = atr(h);

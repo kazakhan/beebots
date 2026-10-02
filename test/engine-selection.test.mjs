@@ -341,3 +341,35 @@ test("a genuine fault is still logged as an error", async () => {
   );
   s.close();
 });
+
+test("Scout considers a non-meme market (no category gate)", async () => {
+  const { s, engine, seen } = fixture({ engine: "laya+llm" });
+  const row = (product) => ({
+    product,
+    category: "stablecoin",
+    strategyVersion: "2.0.0",
+    setupEligible: true,
+    signalTime: Math.floor(Date.now() / 300000) * 300000,
+    at: Date.now(),
+    close: 101,
+    channelHigh: 100.5,
+    stopPrice: 95,
+    maxEntry: 103,
+    atr: 1,
+    rankScore: 1,
+  });
+  engine.market.snapshot = (id) => [row("XYZ-USDC")];
+  engine.market.quote = async () => ({
+    bid: 100.99,
+    ask: 101,
+    at: Date.now(),
+    bids: [{ price: "100.99", size: "1000" }],
+    asks: [{ price: "101", size: "1000" }],
+  });
+  await engine.cycle();
+  assert.ok(
+    seen.model.some((a) => a.candidates.some((c) => c.product === "XYZ-USDC")),
+    "a non-meme candidate reached the model",
+  );
+  s.close();
+});

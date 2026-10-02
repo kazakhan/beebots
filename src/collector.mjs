@@ -305,10 +305,16 @@ export class UniverseMarket extends Market {
   snapshot(id) {
     if (!id) return super.snapshot();
     const rows = [];
+    let warming = 0,
+      rejected = 0,
+      lastError = null;
     for (const product of this.products) {
       const frames = this.frames.get(product),
         entry = this.entries.get(product);
-      if (!frames || Date.now() - frames.five.at(-1).time > 660000) continue;
+      if (!frames || Date.now() - frames.five.at(-1).time > 660000) {
+        warming++;
+        continue;
+      }
       try {
         const f = evaluate(id, frames, this.config.bots[id], entry.membership);
         const interval =
@@ -330,8 +336,21 @@ export class UniverseMarket extends Market {
             ).length,
           },
         });
-      } catch {}
+      } catch (e) {
+        // Keep the reason instead of swallowing it, so the coverage panel can
+        // show why Scout (or any bot) has no candidates.
+        rejected++;
+        lastError = e.message;
+      }
     }
+    this.lastSnapshot ??= {};
+    this.lastSnapshot[id] = {
+      evaluated: rows.length,
+      warming,
+      rejected,
+      lastError,
+      markets: this.products.length,
+    };
     return id === "momentum" ? rankMomentum(rows, this.config.bots[id]) : rows;
   }
   coverage() {
@@ -358,40 +377,41 @@ export class UniverseMarket extends Market {
       total: rows.length,
       eligible: this.products.length,
       ready: rows.filter((x) => x.ready && x.eligible).length,
-      scout: rows.filter(
-        (x) => x.eligible && ["meme", "speculative"].includes(x.category),
-      ).length,
+      // Scout now scans every tradeable market; this is the whole universe.
+      scout: this.products.length,
       active: this.active.size,
       marketReads: this.reads,
       rows,
       bots: Object.fromEntries(
-        Object.entries(evidence).map(([id, rs]) => [
-          id,
-          {
-            evaluated: rs.length,
-            eligible: rs.filter((f) => f.setupEligible).length,
-            shortlist: rs
-              .filter(
-                (f) =>
-                  id !== "breakout" ||
-                  ["meme", "speculative"].includes(f.category),
-              )
-              .sort(
-                (a, b) =>
-                  Number(b.setupEligible) - Number(a.setupEligible) ||
-                  b.rankScore - a.rankScore,
-              )
-              .slice(0, 5)
-              .map((f) => ({
-                product: f.product,
-                eligible: f.setupEligible,
-                reasons: f.reasons,
-                signalTime: f.signalTime,
-                relativeVolume: f.relativeVolume,
-                rankPercentile: f.rankPercentile,
-              })),
-          },
-        ]),
+        Object.entries(evidence).map(([id, rs]) => {
+          const snap = this.lastSnapshot?.[id] ?? {};
+          return [
+            id,
+            {
+              evaluated: rs.length,
+              eligible: rs.filter((f) => f.setupEligible).length,
+              // Why products were dropped: no frames yet vs an evaluate error.
+              warming: snap.warming ?? 0,
+              rejected: snap.rejected ?? 0,
+              note: snap.lastError ?? null,
+              shortlist: rs
+                .sort(
+                  (a, b) =>
+                    Number(b.setupEligible) - Number(a.setupEligible) ||
+                    b.rankScore - a.rankScore,
+                )
+                .slice(0, 5)
+                .map((f) => ({
+                  product: f.product,
+                  eligible: f.setupEligible,
+                  reasons: f.reasons,
+                  signalTime: f.signalTime,
+                  relativeVolume: f.relativeVolume,
+                  rankPercentile: f.rankPercentile,
+                })),
+            },
+          ];
+        }),
       ),
     };
   }

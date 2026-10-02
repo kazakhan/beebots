@@ -111,6 +111,11 @@ test("v2 pipeline risk-sizes independent candidates and persists interval dedupl
   await e.cycle();
   assert.equal(calls, 0);
   assert.equal(s.read().assessments?.breakout, undefined);
+  // Visible, not silent: an empty snapshot still records a SKIP.
+  assert.match(
+    s.read().bots.breakout.lastDecision?.reason ?? "",
+    /warming/,
+  );
   market.snapshot = readySnapshot;
   await e.cycle();
   assert.equal(submitted.length, 3);
@@ -969,4 +974,22 @@ test("relative volume remains a 2x threshold", () => {
   const thin = scout(breakoutFrame({ lastVolume: 1.9 }));
   assert.equal(thin.setupEligible, false);
   assert.ok(thin.reasons.includes("Relative volume insufficient"));
+});
+
+test("Scout's warm-up is tunable via minSignalBars", () => {
+  const five = Array.from({ length: 130 }, (_, i) => bar(i));
+  // 130 bars clears the new 120 default but not an explicit 150.
+  assert.doesNotThrow(() =>
+    evaluate("breakout", { five }, {}, { category: "unclassified" }),
+  );
+  assert.throws(
+    () =>
+      evaluate(
+        "breakout",
+        { five },
+        { minSignalBars: 150 },
+        { category: "unclassified" },
+      ),
+    /warming/,
+  );
 });

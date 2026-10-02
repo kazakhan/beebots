@@ -14,6 +14,41 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.2.2] - 2026-10-02 - Scout sees every market; warming is no longer silent
+
+Scout had produced no decisions at all. The engine silently `continue`d when a
+bot's strategy snapshot was empty, and Scout's snapshot empties whenever
+`evaluate` throws - which for breakout meant "requires 200 completed signal
+bars" (~16.7 h). The error was swallowed (`catch {}`), so the bot vanished from
+the decision stream with no trace. That warm-up also silently excluded the new
+coins Scout is meant to trade.
+
+### Fixed
+
+- **Scout scans every tradeable market.** Removed the meme/speculative/
+  unclassified category gate in the engine and in the coverage panel; meme and
+  new listings remain a **ranking priority**, not a filter.
+- **Warming is visible.** When a bot's strategy snapshot is empty the engine no
+  longer skips silently: it records a `SKIP` - "No market read yet (strategy
+  warming)" - once per cadence bucket, and does **not** consume the cadence (so a
+  later valid assessment in the same bucket still runs). A held asset with no
+  market read surfaces a status once per bucket.
+- **Tunable warm-up.** `minSignalBars` is a new tunable (defaults: breakout 120,
+  was a hard 200; trend 60; momentum 4), so young coins are not silently
+  excluded. Added to the numeric override schema.
+- **The collector no longer swallows the reason.** `snapshot(id)` counts
+  `warming` and `rejected` products with the last error; Market coverage shows
+  them per bot, so "why does Scout have no candidates" is answerable from the
+  dashboard.
+
+### Verification
+
+- 244 Node tests pass, up from 242: Scout's tunable warm-up, the warming SKIP is
+  recorded (and the cadence not consumed), and a non-meme candidate reaches the
+  model.
+
+---
+
 ## [3.2.1] - 2026-10-02 - The loop decides reverts; there is no manual revert
 
 A revert is a decision of the self-improvement loop, not a button. The manual
