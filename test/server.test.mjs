@@ -554,3 +554,79 @@ test("api/state carries a build id so the dashboard can detect a stale backend",
     store.close();
   }
 });
+
+test("the review endpoint is authenticated, control-gated and fire-and-forget", async () => {
+  const c = config(),
+    store = new Store(":memory:", c);
+  let runs = 0;
+  const engine = {
+    reviewing: false,
+    review: async () => {
+      runs++;
+      engine.reviewing = true;
+      await new Promise((r) => setImmediate(r));
+      engine.reviewing = false;
+    },
+    snapshot: () => ({
+      mode: "observe",
+      bots: [],
+      reviewing: engine.reviewing,
+    }),
+  };
+  const server = createServer({ config: c, store, engine });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${server.address().port}/beebots/`;
+  try {
+    assert.equal(
+      (await fetch(url + "api/review/run", { method: "POST" })).status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(url + "api/review/run", {
+          method: "POST",
+          headers: { ...headers },
+        })
+      ).status,
+      403,
+    );
+    const ok = await fetch(url + "api/review/run", {
+      method: "POST",
+      headers: controlHeaders(c.publicOrigin),
+    });
+    assert.equal(ok.status, 202);
+    assert.equal((await ok.json()).started, true);
+    assert.equal(runs, 1);
+  } finally {
+    server.closeStreams();
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+    store.close();
+  }
+});
+
+test("the review endpoint reports started:false while a review is running", async () => {
+  const c = config(),
+    store = new Store(":memory:", c);
+  const engine = {
+    reviewing: true,
+    review: async () => {},
+    snapshot: () => ({ mode: "observe", bots: [] }),
+  };
+  const server = createServer({ config: c, store, engine });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${server.address().port}/beebots/`;
+  try {
+    const r = await fetch(url + "api/review/run", {
+      method: "POST",
+      headers: controlHeaders(c.publicOrigin),
+    });
+    assert.equal(r.status, 202);
+    assert.equal((await r.json()).started, false);
+  } finally {
+    server.closeStreams();
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+    store.close();
+  }
+});

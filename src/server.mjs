@@ -151,6 +151,21 @@ export function createServer({
         });
         return;
       }
+      if (
+        path === config.basePath + "api/review/run" &&
+        req.method === "POST"
+      ) {
+        // Owner-triggered review. Fire-and-forget: the LLM review can take
+        // minutes, so the caller is told it started and the card updates when
+        // it finishes. A second request while one runs reports started:false.
+        if (!(await control(req)))
+          return json(403, { error: "Invalid control origin" });
+        if (typeof engine.review !== "function")
+          return json(501, { error: "Review unavailable" });
+        const started = !engine.reviewing;
+        if (started) void engine.review(true).catch(() => {});
+        return json(202, { started });
+      }
       if (path === config.basePath + "api/entries" && req.method === "POST") {
         if (!(await control(req)))
           return json(403, { error: "Invalid control origin" });

@@ -100,7 +100,7 @@ const engine = {
     strategyVersion: 2,
     // Matches the backend build the page expects, so the version-skew check does
     // not fire against the synthetic preview.
-    build: "3.3.2",
+    build: "3.3.3",
     // Synthetic free-model fixture: proves the cost line and provider-driven
     // labels render without any provider connection.
     modelUsage: {

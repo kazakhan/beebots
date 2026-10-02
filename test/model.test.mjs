@@ -448,3 +448,84 @@ test("model result does not propagate extra fields into audit events", () =>
       assert.equal(r.action, "SKIP");
     },
   ));
+
+// A fixture for the review endpoint. `reply(n, body)` returns the raw message
+// content for call n (1-based), so the parse and retry paths can be exercised.
+async function reviewServer(reply, fn) {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    let text = "";
+    req.on("data", (c) => (text += c));
+    req.on("end", () => {
+      calls++;
+      lastRequest = text ? JSON.parse(text) : null;
+      const { content, finish_reason } = reply(calls, lastRequest);
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { content }, finish_reason }],
+        }),
+      );
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    return await fn(
+      new DecisionModel({
+        baseUrl: `http://127.0.0.1:${server.address().port}`,
+        name: "test",
+        allowNoKey: true,
+      }),
+      () => calls,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+  }
+}
+
+test("the review reads JSON even when the model wraps it in prose", async () => {
+  await reviewServer(
+    () => ({
+      content:
+        'Here is the review:\n```json\n{"summary":"ok","proposals":[]}\n```\nDone.',
+    }),
+    async (m) => {
+      const r = await m.review("sys", "user", 1000);
+      assert.equal(r.data.summary, "ok");
+    },
+  );
+});
+
+test("a length-truncated review is reported as truncated, not as invalid JSON", async () => {
+  await reviewServer(
+    () => ({ content: '{"summary":"cut off', finish_reason: "length" }),
+    async (m) => {
+      await assert.rejects(m.review("sys", "user", 1000), /truncated/);
+    },
+  );
+});
+
+test("the review retries once when the first reply has no JSON", async () => {
+  await reviewServer(
+    (n) =>
+      n === 1
+        ? { content: "I cannot comply with that request." }
+        : { content: '{"summary":"retry ok","proposals":[]}' },
+    async (m, calls) => {
+      const r = await m.review("sys", "user", 1000);
+      assert.equal(r.data.summary, "retry ok");
+      assert.equal(calls(), 2);
+    },
+  );
+});
+
+test("the review reports not-JSON only after the retry also fails", async () => {
+  await reviewServer(
+    () => ({ content: "still no object here" }),
+    async (m, calls) => {
+      await assert.rejects(m.review("sys", "user", 1000), /not JSON/);
+      assert.equal(calls(), 2);
+    },
+  );
+});

@@ -46,6 +46,7 @@ function fixture() {
       at: Date.now(),
     }),
     prices: () => ({ "BTC-USDC": 60000 }),
+    snapshot: () => ({}),
   };
   const engine = new Engine({
     config: c,
@@ -153,4 +154,57 @@ test("incomplete candles excluded and gaps rejected", () => {
   assert.equal(closedCandles(rows, 900, now).length, 100);
   rows.splice(50, 1);
   assert.throws(() => closedCandles(rows, 900, now), /Missing/);
+});
+
+test("the snapshot exposes the review running state and error", () => {
+  const f = fixture();
+  try {
+    const snap = f.engine.snapshot();
+    assert.equal(snap.reviewing, false);
+    assert.equal(snap.reviewError, null);
+    f.engine.reviewing = true;
+    assert.equal(f.engine.snapshot().reviewing, true);
+  } finally {
+    f.store.close();
+  }
+});
+
+test("review skips an hour already reviewed but retries a failed one", async () => {
+  const f = fixture();
+  let runs = 0;
+  f.engine.reviewer = { run: async () => void runs++ };
+  await f.engine.review();
+  assert.equal(runs, 1, "first pass reviews the current hour");
+  const hour = Math.floor(Date.now() / 3600000) * 3600000;
+  f.store.change(
+    (st) => {
+      st.lastReview = { until: hour, summary: "ok" };
+      st.lastReviewError = null;
+    },
+    "test",
+    {},
+  );
+  await f.engine.review();
+  assert.equal(runs, 1, "an already-reviewed hour is skipped");
+  f.store.change(
+    (st) => {
+      st.lastReviewError = { at: hour, message: "nope" };
+    },
+    "test",
+    {},
+  );
+  await f.engine.review();
+  assert.equal(runs, 2, "a failed hour is retried");
+  f.store.close();
+});
+
+test("scheduleReview runs the just-closed hour on startup", async () => {
+  const f = fixture();
+  let runs = 0;
+  f.engine.reviewer = { run: async () => void runs++ };
+  f.engine.scheduleReview();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(runs, 1, "startup triggers one review without waiting for :00");
+  f.engine.stop();
+  f.store.close();
 });

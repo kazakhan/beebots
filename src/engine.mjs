@@ -32,7 +32,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.2";
+const BUILD = "3.3.3";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -384,13 +384,21 @@ export class Engine {
     );
     first.unref?.();
     this.timers.push(first);
+    // Review the hour that just closed on startup, rather than waiting for the
+    // next wall-clock :00. review() is idempotent for an already-reviewed hour.
+    void this.review();
   }
-  async review() {
+  async review(force = false) {
     if (this.reviewing || this.stopped) return;
+    const until = Math.floor(Date.now() / 3600000) * 3600000;
+    const since = until - 3600000;
+    if (!force) {
+      const s = this.store.read();
+      // Already reviewed this hour successfully; a failed hour is retried.
+      if (s.lastReview?.until === until && !s.lastReviewError) return;
+    }
     this.reviewing = true;
     try {
-      const until = Math.floor(Date.now() / 3600000) * 3600000;
-      const since = until - 3600000;
       await this.reviewer.run({
         since,
         until,
@@ -1482,6 +1490,8 @@ export class Engine {
       // version it was shipped with and reports the mismatch.
       build: BUILD,
       review: s.lastReview ?? null,
+      reviewError: s.lastReviewError ?? null,
+      reviewing: !!this.reviewing,
       paused: s.paused,
       halt: s.halt,
       ruleHash: this.currentRuleHash(),

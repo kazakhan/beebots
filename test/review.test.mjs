@@ -545,3 +545,90 @@ test("with an LLM the review sees Laya's verdict, not the raw hour", async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a failed LLM review keeps the last good one and records the error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-fail-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    let fail = false;
+    const model = {
+      review: async () => {
+        if (fail) throw Error("Review is not JSON");
+        return { data: { summary: "all good", proposals: [] } };
+      },
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(store.read().lastReview.summary, "all good");
+    fail = true;
+    await reviewer.run({
+      since: 3600000,
+      until: 7200000,
+      coverage: null,
+      autoApply: false,
+    });
+    const st = store.read();
+    assert.equal(st.lastReview.until, 3600000, "kept the last good review");
+    assert.equal(st.lastReview.summary, "all good");
+    assert.equal(st.lastReviewError.at, 7200000);
+    assert.equal(st.lastReviewError.message, "Review is not JSON");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the LLM review keeps at most one proposal by default", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-cap-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    const model = {
+      review: async () => ({
+        data: {
+          summary: "three ideas",
+          proposals: [
+            { target: "out.of.scope", current: "a", proposed: "b" },
+            { target: "out.of.scope.two", current: "a", proposed: "b" },
+            { target: "out.of.scope.three", current: "a", proposed: "b" },
+          ],
+        },
+      }),
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(rec.proposals.length, 1, "one proposal kept by default");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

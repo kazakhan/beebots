@@ -613,13 +613,13 @@ export class TradeReview {
         // hour. Laya digests; the LLM decides and writes text.
         const user =
           "LAYA'S REVIEW\n" +
-          JSON.stringify(laya.answers, null, 1) +
+          JSON.stringify(laya.answers) +
           "\n\nSCOREBOARD\n" +
           scoreboardLines(s.orders).join("\n") +
           "\n\nAPPLIED CHANGES (your prior edits and their effect)\n" +
-          JSON.stringify(this.appliedLedger(s.orders), null, 1) +
+          JSON.stringify(this.appliedLedger(s.orders)) +
           "\n\nCURRENT TARGETS\n" +
-          JSON.stringify(this.currentTargets(), null, 1) +
+          JSON.stringify(this.currentTargets()) +
           "\n\n" +
           this.schemaText();
         try {
@@ -635,7 +635,7 @@ export class TradeReview {
           proposals = Array.isArray(r.data?.proposals)
             ? r.data.proposals.slice(
                 0,
-                Math.max(1, Number(this.config?.review?.maxProposals) || 2),
+                Math.max(1, Number(this.config?.review?.maxProposals) || 1),
               )
             : [];
           try {
@@ -717,16 +717,28 @@ export class TradeReview {
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
       error,
     };
+    // Keep the last successful review so a failed attempt cannot blank the
+    // card, and record the failure separately for the dashboard to show.
+    const attemptError = error || laya?.error || null;
     this.store.change(
       (st) => {
-        st.lastReview = record;
+        if (attemptError) {
+          st.lastReviewError = { at: until, message: attemptError };
+          // No prior review, or the shown one is already this failed hour:
+          // show the failed record rather than an empty panel.
+          if (!st.lastReview || st.lastReview.until === until)
+            st.lastReview = record;
+        } else {
+          st.lastReview = record;
+          st.lastReviewError = null;
+        }
       },
       "review",
       {
         summary,
         proposals: reviewed.length,
         applied: reviewed.filter((d) => d.applied).length,
-        error,
+        error: attemptError,
       },
     );
     return record;

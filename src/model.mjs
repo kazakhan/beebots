@@ -24,6 +24,41 @@ function backoff(error) {
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Pull the first JSON object out of a model reply, tolerating markdown fences
+// and prose before or after it. Returns null when no balanced object exists, so
+// the caller can retry or report the exact failure.
+function extractJsonObject(text) {
+  if (typeof text !== "string") return null;
+  const stripped = text.replace(/```(?:json)?/gi, "");
+  const start = stripped.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0,
+    inStr = false,
+    esc = false;
+  for (let i = start; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(stripped.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export class DecisionModel {
   constructor(config, timeoutMs = 45000, settings = null) {
     this.config = config;
@@ -240,16 +275,35 @@ export class DecisionModel {
       ...(spec?.maxTokens ? { max_tokens: spec.maxTokens } : {}),
       ...(spec?.jsonMode ? { response_format: { type: "json_object" } } : {}),
     };
-    const out = await this.call(resolved, body, timeoutMs);
-    const content = out.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || content.length > 20000)
+    let out = await this.call(resolved, body, timeoutMs);
+    if (out.choices?.[0]?.finish_reason === "length")
+      throw Error("Review response truncated");
+    let content = out.choices?.[0]?.message?.content;
+    if (typeof content === "string" && content.length > 20000)
       throw Error("Invalid review response");
-    let data;
-    try {
-      data = JSON.parse(content.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-    } catch {
-      throw Error("Review is not JSON");
+    let data = extractJsonObject(content);
+    if (!data) {
+      // One retry: a reasoning model may pad the reply with prose. Ask again,
+      // tersely, for the object alone.
+      const retry = {
+        ...body,
+        messages: [
+          { role: "system", content: system },
+          {
+            role: "user",
+            content:
+              user +
+              "\n\nIMPORTANT: Reply with only the JSON object. No prose, no markdown fences.",
+          },
+        ],
+      };
+      out = await this.call(resolved, retry, timeoutMs);
+      if (out.choices?.[0]?.finish_reason === "length")
+        throw Error("Review response truncated");
+      content = out.choices?.[0]?.message?.content;
+      data = extractJsonObject(content);
     }
+    if (!data) throw Error("Review is not JSON");
     return {
       data,
       usage: out.usage || null,

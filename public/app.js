@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.3.2";
+const EXPECTED_BUILD = "3.3.3";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -230,7 +230,9 @@ function renderReview(s) {
   const r = s.review;
   const when = $("#review-when");
   if (!r) {
-    el.innerHTML = '<p class="muted">Waiting for the first hourly review…</p>';
+    el.innerHTML = s.reviewError
+      ? `<p class="note negative">Last review attempt failed: ${esc(s.reviewError.message)}</p><p class="muted">Waiting for the first successful review…</p>`
+      : '<p class="muted">Waiting for the first hourly review…</p>';
     return;
   }
   if (when)
@@ -243,6 +245,9 @@ function renderReview(s) {
   let html = "";
   if (r.error)
     html += `<p class="note negative">Review error: ${esc(r.error)}</p>`;
+  // A later attempt failed but the card still shows the last good review.
+  if (s.reviewError && r.until !== s.reviewError.at)
+    html += `<p class="note negative">Later review attempt failed (${new Date(s.reviewError.at).toLocaleString()}): ${esc(s.reviewError.message)}</p>`;
   if (r.laya?.error)
     html += `<p class="note negative">Laya: ${esc(r.laya.error)}</p>`;
   if (r.summary) html += `<p class="review-summary">${esc(r.summary)}</p>`;
@@ -342,6 +347,14 @@ function render(s) {
     s.halt || (s.paused ? "New entries paused" : "Agents active");
   $("#pause").disabled = s.mode !== "live" || !!s.halt;
   $("#pause").textContent = s.paused ? "Resume entries" : "Pause entries";
+  // The review trigger is an owner control: visible only when signed in, and
+  // disabled while a review is already running.
+  const runBtn = $("#review-run");
+  if (runBtn) {
+    runBtn.hidden = !isLoggedIn();
+    runBtn.disabled = !!s.reviewing;
+    runBtn.textContent = s.reviewing ? "Review running…" : "Run review";
+  }
   $("#mode").dataset.mode =
     s.mode === "live" ? "live" : s.mode === "demo" ? "demo" : "observe";
   // The summary strip is real money only: a paper arm's simulated capital must
@@ -915,6 +928,27 @@ $("#pause").onclick = async () => {
   if (!r.ok) alert("Control request rejected");
   await refresh();
 };
+// Run the hourly review on demand. Owner-only; fire-and-forget, because the
+// review can take minutes. The card updates when the state next refreshes.
+$("#review-run")?.addEventListener("click", async () => {
+  if (!isLoggedIn()) return showLogin();
+  const btn = $("#review-run");
+  if (btn) btn.disabled = true;
+  const r = await authFetch("api/review/run", {
+    method: "POST",
+    headers: { "X-Beebots-Control": "1" },
+  }).catch(() => null);
+  if (!r || r.status === 401) {
+    clearCreds();
+    return showLogin();
+  }
+  if (!r.ok) {
+    alert("Review request rejected");
+    if (btn) btn.disabled = false;
+    return;
+  }
+  await refresh();
+});
 // Theme toggle: theme.js has already applied the stored (or OS) theme before
 // first paint; this only flips it and remembers the choice.
 $("#theme-toggle").onclick = () => {

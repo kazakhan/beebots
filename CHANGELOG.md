@@ -14,6 +14,44 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.3] - 2026-10-03 - The review reports why, keeps the last good one, and can be run on demand
+
+The Trade Review card read _"Review error: Review is not JSON"_ most hours. The
+hourly review asks the decision model for a full JSON document; on a reasoning
+model the reply was truncated (`finish_reason: "length"`) or padded with prose,
+so `JSON.parse` threw — and because the failed record overwrote the last one,
+the card lost the previous good review too. There was no run at startup and no
+way to ask for one.
+
+### Fixed
+
+- **Reviews no longer lose the last good result.** A failed attempt keeps the
+  previous successful review on the card and records the failure separately as
+  `lastReviewError` (shown as "Later review attempt failed…"). Only the first
+  ever failure, or a failure for the hour already shown, replaces the card.
+- **The review parses the reply robustly.** It pulls the first balanced JSON
+  object out of the response (tolerating prose and markdown fences), reports a
+  truncated reply as `Review response truncated` rather than "not JSON", and
+  retries once with a terse JSON-only instruction before giving up.
+- **The review runs on startup** over the hour that just closed, instead of
+  waiting for the next wall-clock `:00`. It is idempotent for an already-reviewed
+  hour and retries an hour that failed.
+- **Owner-triggered "Run review" button** in the Trade Review panel (visible only
+  when signed in, disabled while one runs). It calls the new authenticated
+  `POST api/review/run` (control origin + owner login, fire-and-forget, `202
+{started}`) and the card updates when the review finishes.
+- **Smaller review output** so it fits the model budget: `currentTargets()` and
+  the ledger are sent as compact JSON, and the LLM keeps at most **one**
+  proposal per hour by default (was two).
+
+### Verification
+
+- 258 Node tests pass, up from 250: review parsing/truncation/retry, the
+  last-good-review retention and error record, the one-proposal cap, the
+  authenticated `api/review/run` route, and startup review + snapshot state.
+
+---
+
 ## [3.3.2] - 2026-10-03 - The offered move set equals the accepted move set
 
 Laya repeatedly chose BUY for coins the engine then refused ("Entry no longer
