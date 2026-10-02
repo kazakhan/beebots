@@ -14,6 +14,40 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.4] - 2026-10-03 - The review stops truncating; the design is written down
+
+The hourly review failed most hours (`Review is not JSON`, then `Review response
+truncated` after 3.3.3 renamed it). The cause: the review asked the LLM to echo
+the **full current value and the full proposed value** of a target. Changing your
+saved 4 KB Laya question set meant sending it out and getting it back — ~2,000
+tokens for one target — which overran the model's 8192-token output cap, leaving
+incomplete JSON. `current` was only ever used for display; the gate, `apply`, and
+the change ledger never read it.
+
+### Fixed
+
+- **The review no longer truncates.** The LLM returns only `proposed`; the server
+  fills `current` from the target file for display. Proposal/observation/summary
+  sizes are capped, and a truncated or malformed reply is retried once with an
+  explicit compact instruction (no `current`, one proposal).
+- **The loop never breaks.** If the LLM review stage cannot run (no endpoint/key,
+  timeout, truncation, or bad JSON), Stage 2 falls back to Laya's bounded
+  self-tune instead of erroring. This is the out-of-the-box, Laya-only path.
+  The failure is surfaced on the card as `LLM review unavailable: …`.
+- **The pipeline and its two switches are documented** in the new `SYSTEM.md`,
+  and in the `review.mjs` header: Stage 1 Laya reviews the hour; Stage 2 the LLM
+  reviews Laya's review and may change Laya's rubric and the bots' strategy. The
+  decision-stream LLM switch (engine = `laya`) must never gate the review; the
+  separate "Use the LLM for the hourly review" toggle (default on) is kept.
+
+### Verification
+
+- 264 Node tests pass, up from 261: truncated-first-retry, the self-tune fallback
+  with `llmError`, the last-good-review retention on a Stage 1 failure, and
+  server-side `current` filling.
+
+---
+
 ## [3.3.3] - 2026-10-03 - The review reports why, keeps the last good one, and can be run on demand
 
 The Trade Review card read _"Review error: Review is not JSON"_ most hours. The

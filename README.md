@@ -6,6 +6,11 @@ before it acts, and a password-protected dashboard shows each order, fill, fee
 and decision as it happens. Protective exits are plain code, and the runtime
 submits real orders only when explicitly configured to.
 
+**How the system is meant to work — read [SYSTEM.md](SYSTEM.md) first.** It
+describes the recursive loop, the Laya/LLM roles, the two switches (decision
+engine and the hourly LLM review), and the safety invariants. It is the source of
+truth for the design.
+
 **Strategy v2:** automatic USDC discovery, speculative breakout Scout, trend-pullback
 Keeper and cross-market momentum Spark. See [v2 release and migration](deploy/UPGRADE-V2.md).
 The original v1 runtime/config remain compatible for existing positions and tests;

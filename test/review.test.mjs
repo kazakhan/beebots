@@ -546,12 +546,17 @@ test("with an LLM the review sees Laya's verdict, not the raw hour", async () =>
   }
 });
 
-test("a failed LLM review keeps the last good one and records the error", async () => {
+test("a failed LLM review falls back to Laya self-tune and records the reason", async () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-review-fail-"));
   const store = new Store(":memory:", config());
   try {
     const laya = {
-      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+      ask: async () => ({
+        answers: {
+          primary_bottleneck: { choice: "momentum" },
+          momentum_quality: { score: 0 },
+        },
+      }),
     };
     let fail = false;
     const model = {
@@ -559,6 +564,58 @@ test("a failed LLM review keeps the last good one and records the error", async 
         if (fail) throw Error("Review is not JSON");
         return { data: { summary: "all good", proposals: [] } };
       },
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(store.read().lastReview.summary, "all good");
+    fail = true;
+    const rec = await reviewer.run({
+      since: 3600000,
+      until: 7200000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(rec.llmError, "Review is not JSON");
+    assert.equal(rec.error, null, "the review still succeeded");
+    assert.match(rec.summary, /Laya self-tune/);
+    assert.ok(
+      rec.proposals.length >= 1,
+      "the self-tune still proposes a bounded change",
+    );
+    const st = store.read();
+    assert.equal(st.lastReview.until, 7200000);
+    assert.equal(st.lastReviewError, null);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Stage 1 Laya failure keeps the last good review and records it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-layafail-"));
+  const store = new Store(":memory:", config());
+  try {
+    let fail = false;
+    const laya = {
+      ask: async () => {
+        if (fail) throw Error("laya down");
+        return { answers: { exit_timing: { choice: "late" } } };
+      },
+    };
+    const model = {
+      review: async () => ({ data: { summary: "all good", proposals: [] } }),
     };
     const reviewer = new TradeReview({
       store,
@@ -586,7 +643,54 @@ test("a failed LLM review keeps the last good one and records the error", async 
     assert.equal(st.lastReview.until, 3600000, "kept the last good review");
     assert.equal(st.lastReview.summary, "all good");
     assert.equal(st.lastReviewError.at, 7200000);
-    assert.equal(st.lastReviewError.message, "Review is not JSON");
+    assert.equal(st.lastReviewError.message, "laya down");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the review fills current from the target when the model omits it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-current-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    const model = {
+      review: async () => ({
+        data: {
+          summary: "x",
+          proposals: [
+            {
+              target: "params.momentum",
+              proposed: '{"minSignalBars":12}',
+              rationale: "r",
+            },
+          ],
+        },
+      }),
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(rec.proposals.length, 1);
+    assert.ok(
+      typeof rec.proposals[0].current === "string" &&
+        rec.proposals[0].current.includes("minSignalBars"),
+      "current was filled from the target file",
+    );
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

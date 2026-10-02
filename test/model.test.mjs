@@ -529,3 +529,20 @@ test("the review reports not-JSON only after the retry also fails", async () => 
     },
   );
 });
+
+test("a truncated first review retries and accepts the compact retry", async () => {
+  await reviewServer(
+    (n) =>
+      n === 1
+        ? { content: '{"summary":"cut', finish_reason: "length" }
+        : {
+            content: '{"summary":"retry ok","proposals":[]}',
+            finish_reason: "stop",
+          },
+    async (m, calls) => {
+      const r = await m.review("sys", "user", 1000);
+      assert.equal(r.data.summary, "retry ok");
+      assert.equal(calls(), 2);
+    },
+  );
+});

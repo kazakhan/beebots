@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.3.3";
+const EXPECTED_BUILD = "3.3.4";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -245,6 +245,9 @@ function renderReview(s) {
   let html = "";
   if (r.error)
     html += `<p class="note negative">Review error: ${esc(r.error)}</p>`;
+  // The LLM review stage could not run; Laya self-tuned in its place.
+  if (r.llmError)
+    html += `<p class="note negative">LLM review unavailable: ${esc(r.llmError)}</p>`;
   // A later attempt failed but the card still shows the last good review.
   if (s.reviewError && r.until !== s.reviewError.at)
     html += `<p class="note negative">Later review attempt failed (${new Date(s.reviewError.at).toLocaleString()}): ${esc(s.reviewError.message)}</p>`;

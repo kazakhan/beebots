@@ -276,15 +276,13 @@ export class DecisionModel {
       ...(spec?.jsonMode ? { response_format: { type: "json_object" } } : {}),
     };
     let out = await this.call(resolved, body, timeoutMs);
-    if (out.choices?.[0]?.finish_reason === "length")
-      throw Error("Review response truncated");
     let content = out.choices?.[0]?.message?.content;
-    if (typeof content === "string" && content.length > 20000)
-      throw Error("Invalid review response");
+    let truncated = out.choices?.[0]?.finish_reason === "length";
     let data = extractJsonObject(content);
     if (!data) {
-      // One retry: a reasoning model may pad the reply with prose. Ask again,
-      // tersely, for the object alone.
+      // One retry, tersely and compactly. A reasoning model may pad the reply
+      // with prose, or overrun its output cap by echoing large current values -
+      // the retry tells it to omit them and return at most one proposal.
       const retry = {
         ...body,
         messages: [
@@ -293,17 +291,19 @@ export class DecisionModel {
             role: "user",
             content:
               user +
-              "\n\nIMPORTANT: Reply with only the JSON object. No prose, no markdown fences.",
+              "\n\nIMPORTANT: Reply with ONLY the JSON object. No prose, no markdown fences. Keep it compact: omit any 'current' fields and return at most one proposal.",
           },
         ],
       };
       out = await this.call(resolved, retry, timeoutMs);
-      if (out.choices?.[0]?.finish_reason === "length")
-        throw Error("Review response truncated");
       content = out.choices?.[0]?.message?.content;
+      truncated = out.choices?.[0]?.finish_reason === "length";
       data = extractJsonObject(content);
     }
-    if (!data) throw Error("Review is not JSON");
+    if (!data)
+      throw Error(
+        truncated ? "Review response truncated" : "Review is not JSON",
+      );
     return {
       data,
       usage: out.usage || null,

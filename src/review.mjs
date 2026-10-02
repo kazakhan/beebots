@@ -1,13 +1,36 @@
 // Trade Review — hourly self-assessment of the bots and Laya.
 //
-// Laya reads the previous hour as text and answers a set of classified heads;
-// the decision model turns those answers into proposals that change a bot's
-// rubric, Laya's question sets, OR the numeric strategy parameters (gates,
-// cadence, candidate cap, timeframe, universe). The objective is to beat the
-// control arm (Dice): more wins, fewer losses. Proposals are applied
-// automatically within hard numeric bounds, and a change that later
-// underperforms Dice is auto-reverted. Everything applied lives as an override
-// under the data directory.
+// DO NOT BREAK THE PIPELINE. Read SYSTEM.md before changing this file.
+//
+// The review is two stages:
+//
+//   Stage 1 — LAYA REVIEWS THE HOUR. Laya reads the previous hour as text and
+//   answers a set of classified heads (this.reviewQuestions()). This always
+//   runs; it is local and free.
+//
+//   Stage 2 — THE LLM REVIEWS LAYA'S REVIEW. The decision model is handed ONLY
+//   Laya's answers (never the raw hour) plus the scoreboard, the applied-change
+//   ledger, the current value of every editable target, and the allowed ranges.
+//   It may change Laya's rubric, Laya's question sets, and the bots' numeric
+//   strategy (gates, cadence, candidate cap, timeframe, universe) and the
+//   runtime knobs.
+//
+// Stage 2 is independent of the decision engine. Turning the LLM OFF for the
+// decision stream (engine = laya) MUST NEVER stop the LLM from reviewing the
+// review; that is what the dedicated "LLM review" toggle is for (settings
+// review.llm, default on). Out of the box, with no LLM at all, Stage 2 falls
+// back to Laya's own bounded self-tune so the loop still improves.
+//
+// The LLM's reply must fit the model's output cap (deepseek-flash: 8192 tokens).
+// That is why the proposal contract carries only `proposed` — the server fills
+// `current` from the target file for display — and why proposals/observations
+// are capped. Do not add `current` back to the requested output: echoing a full
+// 4 KB question set back and forth is what truncates the reply.
+//
+// The objective is to beat the control arm (Dice): more wins, fewer losses.
+// Proposals are applied automatically within hard numeric bounds, and a change
+// that later underperforms Dice is auto-reverted. Everything applied lives as an
+// override under the data directory.
 import {
   existsSync,
   writeFileSync,
@@ -445,12 +468,13 @@ const REVIEW_SYSTEM =
   "per-arm scoreboard versus Dice; (2) judge Laya itself - do its classifications " +
   "track outcomes, and is it being asked the right questions? You are given " +
   "Laya's review of the hour and the per-arm scoreboard, the allowed numeric " +
-  "ranges, and the CURRENT value of every editable target. Propose at most 2 " +
-  "changes. Each proposal's " +
-  "`proposed` field MUST be the COMPLETE replacement - the full rubric text " +
-  "(with heading), the full question-set JSON, or the full numeric JSON - the " +
-  "exact shape of `current`; `current` must be the exact value you are " +
-  "replacing. Numeric values must stay within the allowed ranges; anything " +
+  "ranges, and the CURRENT value of every editable target. Propose at most ONE " +
+  "change. Each proposal's `proposed` field MUST be the COMPLETE replacement - " +
+  "the full rubric text (with heading), the full question-set JSON, or the full " +
+  "numeric JSON - the exact shape of the matching CURRENT TARGET. Do NOT echo " +
+  "the current value back; the code already holds it. Keep it compact: a short " +
+  "summary (at most 600 characters), at most three observations, and a brief " +
+  "rationale. Numeric values must stay within the allowed ranges; anything " +
   "outside is refused. Rubrics must retain their safety clauses: no shorts, " +
   "Laya is uncalibrated evidence not a decision or probability, code controls " +
   "size and execution, do not alter stops, do not force trades. Capital, mode, " +
@@ -459,7 +483,7 @@ const REVIEW_SYSTEM =
   "change ledger shows it is losing to Dice. If nothing is worth changing, " +
   "return an empty proposals list. Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
-  '"proposals":[{"target":"...","current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
+  '"proposals":[{"target":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
 export class TradeReview {
   constructor({ store, laya, model, config, dataDir, reviewLlm = null }) {
@@ -531,23 +555,39 @@ export class TradeReview {
     const eff = this.effectiveRuntime();
     return Object.fromEntries(RUNTIME_KEYS.map((k) => [k, eff[k]]));
   }
+  // The exact current value of one editable target, as the string the model
+  // would have seen and as the dashboard shows it. Used to fill `current` on a
+  // proposal the model returns without it (the model is told not to echo it).
+  currentFor(target) {
+    if (target === "laya.reviewQuestions")
+      return JSON.stringify(this.reviewQuestions(), null, 1);
+    if (target === "runtime")
+      return JSON.stringify(this.runtimeView(), null, 1);
+    if (target === "laya.analysisPolicy")
+      return JSON.stringify(this.currentValue("laya.analysisPolicy"), null, 1);
+    if (target.startsWith("params."))
+      return JSON.stringify(
+        this.paramView(target.slice("params.".length)),
+        null,
+        1,
+      );
+    if (target.startsWith("rubric."))
+      return readOverride(this.dataDir, target) ?? "";
+    return "";
+  }
   // The current value of every editable target, for the model to rewrite.
   currentTargets() {
     const out = {
-      "laya.reviewQuestions": JSON.stringify(this.reviewQuestions(), null, 1),
+      "laya.reviewQuestions": this.currentFor("laya.reviewQuestions"),
     };
     for (const id of STRATEGY_ARMS) {
       const t = readOverride(this.dataDir, `rubric.${id}`);
       if (t) out[`rubric.${id}`] = t;
     }
     for (const id of [...STRATEGY_ARMS, CONTROL_ARM])
-      out[`params.${id}`] = JSON.stringify(this.paramView(id), null, 1);
-    out.runtime = JSON.stringify(this.runtimeView(), null, 1);
-    out["laya.analysisPolicy"] = JSON.stringify(
-      this.currentValue("laya.analysisPolicy"),
-      null,
-      1,
-    );
+      out[`params.${id}`] = this.currentFor(`params.${id}`);
+    out.runtime = this.currentFor("runtime");
+    out["laya.analysisPolicy"] = this.currentFor("laya.analysisPolicy");
     return out;
   }
   // The allowed numeric ranges, so the model proposes in-bounds values.
@@ -606,11 +646,27 @@ export class TradeReview {
     let summary = null,
       observations = [],
       proposals = [],
-      error = null;
+      error = null,
+      llmError = null;
+    // Laya's bounded self-tune: the no-LLM path, and the fallback when the LLM
+    // review stage cannot run (no endpoint/key) or its reply cannot be used.
+    // This is what lets the loop work out of the box with only Laya.
+    const selfTuneNow = () => {
+      const tuned = selfTune({
+        answers: laya.answers,
+        current: (t) => this.currentValue(t),
+      });
+      summary = tuned.length
+        ? `Laya self-tune: ${tuned.length} bounded change(s)`
+        : "Laya self-tune: no change needed";
+      return tuned;
+    };
     if (!laya.error) {
       if (this.llmEnabled()) {
-        // The LLM authors changes, but sees only Laya's verdict - never the raw
-        // hour. Laya digests; the LLM decides and writes text.
+        // STAGE 2. The LLM authors changes, but sees only Laya's Stage 1 verdict
+        // - never the raw hour. Laya digests; the LLM decides and writes text.
+        // Keep the request and the reply small: the model's output cap is what
+        // truncated the reply before (see the header note).
         const user =
           "LAYA'S REVIEW\n" +
           JSON.stringify(laya.answers) +
@@ -628,15 +684,32 @@ export class TradeReview {
             user,
             this.config?.review?.timeoutMs ?? 300000,
           );
-          summary = typeof r.data?.summary === "string" ? r.data.summary : null;
+          summary =
+            typeof r.data?.summary === "string"
+              ? r.data.summary.slice(0, 1200)
+              : null;
           observations = Array.isArray(r.data?.observations)
-            ? r.data.observations.slice(0, 6)
+            ? r.data.observations.slice(0, 4)
             : [];
           proposals = Array.isArray(r.data?.proposals)
-            ? r.data.proposals.slice(
-                0,
-                Math.max(1, Number(this.config?.review?.maxProposals) || 1),
-              )
+            ? r.data.proposals
+                .slice(
+                  0,
+                  Math.max(1, Number(this.config?.review?.maxProposals) || 1),
+                )
+                .map((p) => ({
+                  ...p,
+                  rationale:
+                    typeof p?.rationale === "string"
+                      ? p.rationale.slice(0, 600)
+                      : p?.rationale,
+                  // The model is told not to echo `current` (it overruns the
+                  // output cap). Fill it from the target file for display/audit.
+                  current:
+                    typeof p?.current === "string" && p.current
+                      ? p.current
+                      : this.currentFor(p?.target),
+                }))
             : [];
           try {
             this.store.recordModelCall({
@@ -650,19 +723,26 @@ export class TradeReview {
             // Budget accounting is telemetry; never fail the review over it.
           }
         } catch (e) {
-          error = e.message;
+          // The LLM stage failed (unconfigured, timed out, truncated, or not
+          // JSON). Fall back to Laya's bounded self-tune so the review still
+          // produces a result. The failure is surfaced, never fatal.
+          llmError = e.message;
+          try {
+            proposals = selfTuneNow();
+            summary = `Laya self-tune (LLM review unavailable: ${e.message}): ${
+              proposals.length
+                ? `${proposals.length} bounded change(s)`
+                : "no change needed"
+            }`;
+          } catch (e2) {
+            error = e2.message;
+          }
         }
       } else {
-        // No LLM: Laya self-tunes - it selects a pre-authored analysis variant
-        // and steps a whitelisted number by one bounded step.
+        // No LLM review: Laya self-tunes - it selects a pre-authored analysis
+        // variant and steps a whitelisted number by one bounded step.
         try {
-          proposals = selfTune({
-            answers: laya.answers,
-            current: (t) => this.currentValue(t),
-          });
-          summary = proposals.length
-            ? `Laya self-tune: ${proposals.length} bounded change(s)`
-            : "Laya self-tune: no change needed";
+          proposals = selfTuneNow();
         } catch (e) {
           error = e.message;
         }
@@ -715,6 +795,7 @@ export class TradeReview {
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
+      llmError,
       error,
     };
     // Keep the last successful review so a failed attempt cannot blank the
