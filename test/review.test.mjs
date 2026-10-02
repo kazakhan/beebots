@@ -429,3 +429,40 @@ test("numeric targets are edge-tier and scored against their own arm", () => {
     ),
   );
 });
+
+test("the hourly state is aggregated and bounded under load", () => {
+  const since = 0,
+    until = 3600000;
+  const events = [];
+  for (let i = 0; i < 900; i++)
+    events.push({
+      ts: i,
+      kind: "analysis",
+      bot: "momentum",
+      product: "P" + i,
+      answers: {
+        regime: { choice: "uptrend" },
+        fit: { score: 1.5 },
+        quality: { choice: "complete" },
+      },
+    });
+  for (let i = 0; i < 300; i++)
+    events.push({
+      ts: i,
+      kind: "decision",
+      bot: "breakout",
+      action: "SKIP",
+      reason: "x".repeat(50),
+    });
+  const state = buildHourState({
+    events,
+    orders: {},
+    coverage: null,
+    since,
+    until,
+  });
+  assert.ok(state.split("\n").length < 500, "bounded line count");
+  assert.match(state, /\(\+780 more labels\)/);
+  assert.match(state, /\(\+100 more decisions\)/);
+  assert.match(state, /momentum: regime uptrend:900/);
+});

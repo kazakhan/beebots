@@ -561,13 +561,21 @@ export class Store extends EventEmitter {
   // dominated the live ledger (283 MB of 291 MB). Audit rows - decision, order,
   // fill, veto, control, system, status, error - are never touched, so the
   // record of what was decided and executed is preserved in full.
-  pruneEvents({ keepMs = 86400000, now = Date.now() } = {}) {
-    const cutoff = now - keepMs;
+  pruneEvents({
+    keepMs = 86400000,
+    analysisKeepMs = 7 * 86400000,
+    now = Date.now(),
+  } = {}) {
     const r = this.db
       .prepare("DELETE FROM events WHERE kind='market' AND ts < ?")
-      .run(cutoff);
+      .run(now - keepMs);
+    // Laya analysis events are high-volume under a short cadence and are only
+    // joined to recent trades, so keep a week and drop the rest.
+    const a = this.db
+      .prepare("DELETE FROM events WHERE kind='analysis' AND ts < ?")
+      .run(now - analysisKeepMs);
     this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    return Number(r.changes ?? 0);
+    return Number(r.changes ?? 0) + Number(a.changes ?? 0);
   }
   // Reclaim disk after pruning. DELETE frees pages for reuse but does not shrink
   // the file, so a large ledger stays large until VACUUM rewrites it. Slow and

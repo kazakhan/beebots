@@ -14,6 +14,40 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.1.1] - 2026-10-02 - Reviews stop timing out: a bounded hour and a review timeout
+
+The 3.1.0 cadence/candidate increase made the review's hourly context explode - a
+5-minute cadence across three bots at 25 candidates wrote ~900 Laya analysis
+events an hour, and the review listed every one verbatim to Laya and the model.
+The model call then exceeded its 45 s budget - "The operation was aborted due to
+timeout" - and every review failed.
+
+### Fixed
+
+- **The review context is aggregated and bounded** (`buildHourState`): Laya's
+  labels become a per-bot regime/quality/fit-bucket summary plus at most 120
+  sample lines; decisions are capped at 200; the coverage shortlist at 5 per bot.
+  The hour drops from ~100 KB to a few KB.
+- **The review gets its own timeout.** `review.timeoutMs` (default 300000) is
+  passed to both `laya.ask` and `model.review`; `DecisionModel.review/call/once`
+  take a per-call timeout, while decisions keep the 45 s `modelTimeoutMs`.
+- **At most 2 proposals** per review (`review.maxProposals`, default 2), so the
+  output stays small enough to return.
+
+### Added
+
+- **Analysis events are pruned after 7 days** (`store.pruneEvents`,
+  `analysisKeepMs`), so a short cadence no longer grows the ledger without bound.
+  Decisions, orders, fills and audit rows are never pruned.
+
+### Verification
+
+- 229 Node tests pass, up from 226: the hourly state stays bounded under ~1200
+  events, `review.timeoutMs`/`review.maxProposals` are validated, and pruning
+  drops old analyses while keeping decisions.
+
+---
+
 ## [3.1.0] - 2026-10-01 - The Trade Review tunes the strategy, not just the prose
 
 The hourly review is the fine-tuner: Laya (or Jev) plus the decision model

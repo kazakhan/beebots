@@ -285,8 +285,14 @@ export function scoreboardLines(orders) {
   return out;
 }
 
-// Build the hour as text for Laya. Bounded: the daemon's context is finite and
-// the state is truncated server-side anyway.
+// Cap the verbatim lines the review feeds Laya and the model. A 5-minute cadence
+// across three bots with 25 candidates each writes ~900 analysis events an hour;
+// listing them all overflowed Laya's context and timed the model out, so the
+// hour is aggregated and sampled.
+const MAX_DECISION_LINES = 200;
+const MAX_ANALYSIS_LINES = 120;
+const MAX_SHORTLIST = 5;
+
 export function buildHourState({ events, orders, coverage, since, until }) {
   const lines = [];
   const inWindow = (e) => e.ts >= since && e.ts < until;
@@ -296,15 +302,45 @@ export function buildHourState({ events, orders, coverage, since, until }) {
     `HOUR ${new Date(since).toISOString()} to ${new Date(until).toISOString()}`,
   );
   lines.push(`DECISIONS (${decisions.length})`);
-  for (const e of decisions)
+  for (const e of decisions.slice(0, MAX_DECISION_LINES))
     lines.push(
       `- ${e.bot} ${e.action}${e.product ? " " + e.product : ""}: ${String(e.reason ?? "").slice(0, 300)}`,
     );
+  if (decisions.length > MAX_DECISION_LINES)
+    lines.push(`(+${decisions.length - MAX_DECISION_LINES} more decisions)`);
   lines.push(`LAYA LABELS (${analyses.length})`);
-  for (const e of analyses)
+  // Aggregate per bot, then a bounded sample of raw lines.
+  const agg = new Map();
+  for (const e of analyses) {
+    let b = agg.get(e.bot);
+    if (!b) {
+      b = { regime: {}, quality: {}, fit: {} };
+      agg.set(e.bot, b);
+    }
+    const r = e.answers?.regime?.choice;
+    if (r) b.regime[r] = (b.regime[r] ?? 0) + 1;
+    const q = e.answers?.quality?.choice;
+    if (q) b.quality[q] = (b.quality[q] ?? 0) + 1;
+    const f = Number(e.answers?.fit?.score);
+    if (Number.isFinite(f)) {
+      const k = f < 1 ? "low" : f <= 1.5 ? "mid" : "high";
+      b.fit[k] = (b.fit[k] ?? 0) + 1;
+    }
+  }
+  const dist = (o) =>
+    Object.entries(o)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(" ") || "none";
+  for (const [bot, a] of agg)
+    lines.push(
+      `- ${bot}: regime ${dist(a.regime)}; quality ${dist(a.quality)}; fit ${dist(a.fit)}`,
+    );
+  for (const e of analyses.slice(0, MAX_ANALYSIS_LINES))
     lines.push(
       `- ${e.bot} ${e.product}: regime=${e.answers?.regime?.choice} fit=${e.answers?.fit?.score} quality=${e.answers?.quality?.choice}`,
     );
+  if (analyses.length > MAX_ANALYSIS_LINES)
+    lines.push(`(+${analyses.length - MAX_ANALYSIS_LINES} more labels)`);
   if (coverage) {
     lines.push("ELIGIBLE SETUPS / REJECTIONS");
     lines.push(
@@ -312,7 +348,10 @@ export function buildHourState({ events, orders, coverage, since, until }) {
     );
     for (const [bot, b] of Object.entries(coverage.bots ?? {}))
       lines.push(
-        `- ${bot}: evaluated ${b.evaluated}, eligible ${b.eligible}; ${b.shortlist
+        `- ${bot}: evaluated ${b.evaluated}, eligible ${b.eligible}; ${(
+          b.shortlist ?? []
+        )
+          .slice(0, MAX_SHORTLIST)
           .map(
             (f) =>
               `${f.product}${f.eligible ? " (eligible)" : " (" + (f.reasons || []).join(", ") + ")"}`,
@@ -343,7 +382,7 @@ const REVIEW_SYSTEM =
   "outcomes, and is it being asked the right questions? You are given the " +
   "decisions, Laya's classifications and performance, the eligible setups, the " +
   "fills, the per-arm scoreboard, the allowed numeric ranges, and the CURRENT " +
-  "value of every editable target. Propose AT MOST 3 changes. Each proposal's " +
+  "value of every editable target. Propose at most 2 changes. Each proposal's " +
   "`proposed` field MUST be the COMPLETE replacement - the full rubric text " +
   "(with heading), the full question-set JSON, or the full numeric JSON - the " +
   "exact shape of `current`; `current` must be the exact value you are " +
@@ -468,6 +507,7 @@ export class TradeReview {
       laya = await this.laya.ask(
         { content: state, kind: "trade_review" },
         this.reviewQuestions(),
+        this.config?.review?.timeoutMs ?? 300000,
       );
     } catch (e) {
       laya = { error: e.message };
@@ -487,13 +527,20 @@ export class TradeReview {
         "\n\n" +
         this.schemaText();
       try {
-        const r = await this.model.review(REVIEW_SYSTEM, user);
+        const r = await this.model.review(
+          REVIEW_SYSTEM,
+          user,
+          this.config?.review?.timeoutMs ?? 300000,
+        );
         summary = typeof r.data?.summary === "string" ? r.data.summary : null;
         observations = Array.isArray(r.data?.observations)
           ? r.data.observations.slice(0, 6)
           : [];
         proposals = Array.isArray(r.data?.proposals)
-          ? r.data.proposals.slice(0, 3)
+          ? r.data.proposals.slice(
+              0,
+              Math.max(1, Number(this.config?.review?.maxProposals) || 2),
+            )
           : [];
         try {
           this.store.recordModelCall({

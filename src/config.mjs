@@ -109,6 +109,18 @@ export function validate(c) {
       typeof c.review.requireControl !== "boolean"
     )
       throw Error("Invalid review.requireControl");
+    if (
+      c.review.timeoutMs !== undefined &&
+      (!Number.isFinite(c.review.timeoutMs) || c.review.timeoutMs < 5000)
+    )
+      throw Error("Invalid review.timeoutMs");
+    if (
+      c.review.maxProposals !== undefined &&
+      (!Number.isInteger(c.review.maxProposals) ||
+        c.review.maxProposals < 1 ||
+        c.review.maxProposals > 5)
+    )
+      throw Error("Invalid review.maxProposals");
   }
   if (/\/(var\/www|htdocs|public_html)(\/|$)/.test(c.dataDir))
     throw Error("Data must be outside web root");

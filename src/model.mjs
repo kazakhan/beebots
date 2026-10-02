@@ -85,7 +85,7 @@ export class DecisionModel {
     return b;
   }
 
-  async once(resolved, payload) {
+  async once(resolved, payload, timeoutMs = this.timeoutMs) {
     const key = resolved.key;
     if (!key && !resolved.allowNoKey)
       throw Error("Decision model key unavailable");
@@ -95,7 +95,7 @@ export class DecisionModel {
         String(resolved.baseUrl).replace(/\/$/, "") + "/chat/completions",
         {
           method: "POST",
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(timeoutMs),
           headers: {
             "Content-Type": "application/json",
             ...(key ? { Authorization: `Bearer ${key}` } : {}),
@@ -135,12 +135,12 @@ export class DecisionModel {
     return body;
   }
 
-  async call(resolved, payload) {
-    const deadline = Date.now() + this.timeoutMs;
+  async call(resolved, payload, timeoutMs = this.timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
     let last;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        return await this.once(resolved, payload);
+        return await this.once(resolved, payload, timeoutMs);
       } catch (e) {
         last = e;
         // One retry only, and only while budget remains inside the deadline.
@@ -219,10 +219,10 @@ export class DecisionModel {
     };
   }
 
-  // A free-form completion used by the Trade Review. Same provider, timeout,
-  // retry and endpoint rules as a decision; only the prompt differs. Returns
-  // parsed JSON plus usage so the caller can budget and audit it.
-  async review(system, user) {
+  // A free-form completion used by the Trade Review. Same provider, endpoint and
+  // retry rules as a decision; the caller may pass a longer timeout because the
+  // review reads an hour of context and writes a full replacement document.
+  async review(system, user, timeoutMs = this.timeoutMs) {
     const resolved = this.resolve();
     if (!resolved.baseUrl) throw Error("No decision-model endpoint configured");
     this.assertEndpoint(resolved.baseUrl, resolved.local);
@@ -240,7 +240,7 @@ export class DecisionModel {
       ...(spec?.maxTokens ? { max_tokens: spec.maxTokens } : {}),
       ...(spec?.jsonMode ? { response_format: { type: "json_object" } } : {}),
     };
-    const out = await this.call(resolved, body);
+    const out = await this.call(resolved, body, timeoutMs);
     const content = out.choices?.[0]?.message?.content;
     if (typeof content !== "string" || content.length > 20000)
       throw Error("Invalid review response");

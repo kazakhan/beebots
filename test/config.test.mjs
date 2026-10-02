@@ -79,3 +79,17 @@ test("per-bot real/paper must be boolean", () => {
   bad.bots.trend.paper = "yes";
   assert.throws(() => validate(bad), /Invalid trend\.paper/);
 });
+
+test("the review timeout and proposal cap are validated", () => {
+  const short = config();
+  short.review = { timeoutMs: 100 };
+  assert.throws(() => validate(short), /review\.timeoutMs/);
+
+  const many = config();
+  many.review = { maxProposals: 9 };
+  assert.throws(() => validate(many), /review\.maxProposals/);
+
+  const ok = config();
+  ok.review = { timeoutMs: 300000, maxProposals: 2, minSample: 5 };
+  assert.equal(validate(ok), ok);
+});
