@@ -45,9 +45,9 @@ export const ENGINES = {
   },
 };
 
-// The default for an install that has never chosen one. It matches the port's
-// long-standing behaviour: Laya classifies, the LLM decides.
-export const DEFAULT_ENGINE = "laya+llm";
+// The default for an install that has never chosen one. Laya decides directly
+// (local and free); the LLM is reserved for the hourly review.
+export const DEFAULT_ENGINE = "laya";
 
 // Order shown in the dashboard: the two System One engines first, then the LLM,
 // then the two hybrids.

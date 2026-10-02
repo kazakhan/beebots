@@ -211,6 +211,7 @@ export function createServer({
           jevApiKey,
           clearJevKey,
           jevModel,
+          reviewLlm,
         } = body.data;
         if (
           apiKey !== undefined &&
@@ -242,6 +243,8 @@ export function createServer({
           typeof jevModel !== "string"
         )
           return json(400, { error: "Invalid Jev model" });
+        if (reviewLlm !== undefined && typeof reviewLlm !== "boolean")
+          return json(400, { error: "Invalid reviewLlm" });
         let saved;
         try {
           saved = settings.save({
@@ -254,6 +257,7 @@ export function createServer({
             jevApiKey,
             clearJevKey,
             jevModel,
+            reviewLlm,
           });
         } catch (e) {
           return json(400, { error: e.message });

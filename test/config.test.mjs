@@ -93,3 +93,12 @@ test("the review timeout and proposal cap are validated", () => {
   ok.review = { timeoutMs: 300000, maxProposals: 2, minSample: 5 };
   assert.equal(validate(ok), ok);
 });
+
+test("review.llm must be boolean", () => {
+  const bad = config();
+  bad.review = { llm: "yes" };
+  assert.throws(() => validate(bad), /review\.llm/);
+  const ok = config();
+  ok.review = { llm: false };
+  assert.equal(validate(ok), ok);
+});

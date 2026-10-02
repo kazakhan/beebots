@@ -536,12 +536,15 @@ test("the model.env key is never forwarded to a different provider", () => {
 
 // --- decision-engine selection (2.9.0) -----------------------------------
 
-test("an install with no engine setting defaults to Laya + LLM", () => {
+test("an install with no engine setting defaults to Laya", () => {
   const f = fixture();
   try {
-    assert.equal(f.settings.engineValue(), "laya+llm");
-    assert.equal(f.settings.redacted().engine, "laya+llm");
-    assert.equal(f.settings.redacted().engineLabel, "Laya + LLM");
+    assert.equal(f.settings.engineValue(), "laya");
+    assert.equal(f.settings.redacted().engine, "laya");
+    assert.equal(f.settings.redacted().engineLabel, "Laya");
+    // The hourly review still uses the LLM by default.
+    assert.equal(f.settings.reviewLlm(), true);
+    assert.equal(f.settings.redacted().reviewLlm, true);
   } finally {
     f.cleanup();
   }
@@ -562,7 +565,7 @@ test("the default engine option overrides the built-in default", () => {
       fallback: { baseUrl: "https://api.deepseek.com", name: "deepseek-flash" },
       defaultEngine: "nope",
     });
-    assert.equal(bad.engineValue(), "laya+llm");
+    assert.equal(bad.engineValue(), "laya");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -667,6 +670,34 @@ test("TYPESAFE_API_KEY is the Jev key fallback before any stored one", () => {
     assert.equal(f.settings.keyJev(), "stored-jev-key");
   } finally {
     delete process.env.TYPESAFE_API_KEY;
+    f.cleanup();
+  }
+});
+
+test("the review LLM toggle defaults on and persists, independent of the engine", () => {
+  const f = fixture();
+  try {
+    assert.equal(f.settings.reviewLlm(), true);
+    const r = f.settings.save({
+      provider: "zai",
+      model: "glm-4.7-flash",
+      apiKey: "k".repeat(8),
+      engine: "laya",
+      reviewLlm: false,
+    });
+    assert.equal(r.reviewLlm, false);
+    assert.equal(f.settings.reviewLlm(), false);
+    assert.equal(f.settings.engineValue(), "laya");
+    assert.throws(
+      () =>
+        f.settings.save({
+          provider: "zai",
+          model: "glm-4.7-flash",
+          reviewLlm: "yes",
+        }),
+      /Invalid reviewLlm/,
+    );
+  } finally {
     f.cleanup();
   }
 });

@@ -100,7 +100,7 @@ const engine = {
     strategyVersion: 2,
     // Matches the backend build the page expects, so the version-skew check does
     // not fire against the synthetic preview.
-    build: "3.2.2",
+    build: "3.3.0",
     // Synthetic free-model fixture: proves the cost line and provider-driven
     // labels render without any provider connection.
     modelUsage: {
@@ -197,8 +197,8 @@ const engine = {
       free: true,
       hasKey: true,
       keyEnv: "BEEBOTS_MODEL_KEY",
-      engine: "jev+llm",
-      engineLabel: "Jev + LLM",
+      engine: "laya",
+      engineLabel: "Laya",
       jevCapUsd: 2,
     },
     coverage: {
@@ -261,8 +261,9 @@ const demoSettings = {
     fallbackName: null,
     endpoint: null,
     defaultEndpoint: null,
-    engine: "laya+llm",
-    engineLabel: "Laya + LLM",
+    engine: "laya",
+    engineLabel: "Laya",
+    reviewLlm: true,
     jev: {
       model: "jev-1.13.0",
       modelDefault: "jev-1.13.0",
@@ -272,7 +273,8 @@ const demoSettings = {
     },
   }),
   key: () => "demo-key",
-  engineValue: () => "laya+llm",
+  engineValue: () => "laya",
+  reviewLlm: () => true,
   effectiveJev: () => ({ model: "jev-1.13.0", key: null }),
   save: () => {
     throw Error("Settings cannot be changed in the synthetic preview");

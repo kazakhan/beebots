@@ -121,6 +121,8 @@ export function validate(c) {
         c.review.maxProposals > 5)
     )
       throw Error("Invalid review.maxProposals");
+    if (c.review.llm !== undefined && typeof c.review.llm !== "boolean")
+      throw Error("Invalid review.llm");
   }
   if (/\/(var\/www|htdocs|public_html)(\/|$)/.test(c.dataDir))
     throw Error("Data must be outside web root");

@@ -492,7 +492,7 @@ test("without an LLM the review self-tunes from Laya's answers", async () => {
       model,
       config: {},
       dataDir: dir,
-      engineId: () => "laya",
+      reviewLlm: () => false,
     });
     const rec = await reviewer.run({
       since: 0,
@@ -531,7 +531,6 @@ test("with an LLM the review sees Laya's verdict, not the raw hour", async () =>
       model,
       config: {},
       dataDir: dir,
-      engineId: () => "laya+llm",
     });
     await reviewer.run({ since: 0, until: 3600000, coverage: null });
     assert.ok(seen.includes("LAYA'S REVIEW"), "Laya's verdict is supplied");

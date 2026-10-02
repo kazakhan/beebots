@@ -51,6 +51,9 @@ export class Settings {
     // The default Jev model is code, not owner input, so a fresh install has a
     // valid value the moment Jev is selected.
     this.defaultJevModel = "jev-1.13.0";
+    // The hourly review uses the LLM by default, independently of the decision
+    // engine (which defaults to Laya-only). Owner-toggleable.
+    this.defaultReviewLlm = true;
     this.cache = null;
   }
 
@@ -142,6 +145,10 @@ export class Settings {
     const jevModel = validModelId(stored?.jevModel)
       ? stored.jevModel
       : this.defaultJevModel;
+    const reviewLlm =
+      typeof stored?.reviewLlm === "boolean"
+        ? stored.reviewLlm
+        : this.defaultReviewLlm;
     this.cache = {
       provider,
       model,
@@ -153,6 +160,7 @@ export class Settings {
       engine,
       jevApiKey,
       jevModel,
+      reviewLlm,
       source: stored && isProvider(stored?.provider) ? "dashboard" : "config",
     };
     return this.cache;
@@ -233,6 +241,11 @@ export class Settings {
     return this.read().engine;
   }
 
+  // Whether the hourly review uses the LLM, independent of the decision engine.
+  reviewLlm() {
+    return this.read().reviewLlm !== false;
+  }
+
   // The Jev key precedence: dashboard settings file, then TYPESAFE_API_KEY.
   // Unlike a provider key, there is only one Jev vendor, so the env fallback is
   // never bound to a different provider selection.
@@ -285,6 +298,7 @@ export class Settings {
       // characters, never the value.
       engine: s.engine,
       engineLabel: engineLabel(s.engine),
+      reviewLlm: s.reviewLlm,
       jev: {
         model: s.jevModel,
         modelDefault: this.defaultJevModel,
@@ -313,6 +327,7 @@ export class Settings {
     jevApiKey,
     clearJevKey,
     jevModel,
+    reviewLlm,
   }) {
     if (!isProvider(provider)) throw Error("Unknown decision-model provider");
     // A dynamic provider's models are discovered, so any well-formed id from its
@@ -333,6 +348,8 @@ export class Settings {
       throw Error("Cannot set and clear the key together");
     if (engine !== undefined && engine !== null && !isEngine(engine))
       throw Error("Unknown decision engine");
+    if (reviewLlm !== undefined && typeof reviewLlm !== "boolean")
+      throw Error("Invalid reviewLlm");
     if (jevModel !== undefined && jevModel !== null && !validModelId(jevModel))
       throw Error("Invalid Jev model");
     if (clearJevKey && jevApiKey)
@@ -373,6 +390,8 @@ export class Settings {
     // A blank Jev key field keeps the stored one; clearJevKey removes it.
     const savedEngine = isEngine(engine) ? engine : current.engine;
     const savedJevModel = validModelId(jevModel) ? jevModel : current.jevModel;
+    const savedReviewLlm =
+      typeof reviewLlm === "boolean" ? reviewLlm : current.reviewLlm;
     let jevKey = current.jevApiKey;
     if (clearJevKey) jevKey = null;
     if (typeof jevApiKey === "string" && jevApiKey) jevKey = jevApiKey;
@@ -384,6 +403,7 @@ export class Settings {
       engine: savedEngine,
       jevApiKey: jevKey,
       jevModel: savedJevModel,
+      reviewLlm: savedReviewLlm,
     });
     return this.redacted();
   }

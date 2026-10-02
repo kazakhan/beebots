@@ -1677,3 +1677,20 @@ select:hover {
 .panels #analysis {
   padding-right: 10px;
 }
+
+/* A checkbox row inside the settings dialog. */
+.settings-body .check-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.settings-body .check-row input {
+  width: auto;
+  margin: 0;
+  flex: none;
+}

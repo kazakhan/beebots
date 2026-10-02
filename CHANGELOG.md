@@ -14,6 +14,33 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.0] - 2026-10-02 - Laya decides; the LLM is for the hourly review
+
+Per-decision LLM calls (roughly 1,150/day at a 5-minute cadence across four bots)
+were the dominant cost. The decision engine and the review model are now
+independent: Laya decides every trade directly (local and free) while the LLM
+authors the hourly review.
+
+### Changed
+
+- **`Laya` is the default engine for a fresh install.** Decisions are
+  classifier-driven; the `Jev`, `LLM`, `Jev + LLM` and `Laya + LLM` engines stay
+  selectable in the gear. An install that already stored an engine keeps it, so
+  switch to `Laya` in the dialog to stop the per-decision LLM calls.
+- **The review's LLM is its own switch** (`review.llm`, default on), persisted
+  with the engine/provider and independent of the decision engine. So Laya can
+  decide while the LLM runs the hourly review; with it off, Laya self-tunes by
+  selection as before.
+- The gear dialog adds **"Use the LLM for the hourly review"**.
+
+### Verification
+
+- 246 Node tests pass, up from 244: the review LLM toggle defaults on and
+  persists independently of the engine; a fresh install defaults to `Laya`;
+  `review.llm` is validated.
+
+---
+
 ## [3.2.2] - 2026-10-02 - Scout sees every market; warming is no longer silent
 
 Scout had produced no decisions at all. The engine silently `continue`d when a

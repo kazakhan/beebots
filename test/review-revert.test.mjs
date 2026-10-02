@@ -28,7 +28,6 @@ test("the LLM can revert one of its own applied changes", async () => {
       },
       config: {},
       dataDir: dir,
-      engineId: () => "laya+llm",
     });
     // A prior applied change, tracked in the ledger.
     reviewer.apply({
@@ -74,7 +73,6 @@ test("with an LLM the deterministic revert controller does not run", async () =>
       model: { review: async () => ({ data: { proposals: [] } }) },
       config: {},
       dataDir: dir,
-      engineId: () => "laya+llm",
     });
     let ran = 0;
     reviewer.revertLosers = () => {

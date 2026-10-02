@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.2.2";
+const EXPECTED_BUILD = "3.3.0";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -647,6 +647,8 @@ function renderSettings(s) {
   const engine = catalogue.current?.engine ?? s.model?.engine;
   if (engine && $("#settings-engine").value !== engine)
     $("#settings-engine").value = engine;
+  const reviewLlmEl = $("#settings-review-llm");
+  if (reviewLlmEl) reviewLlmEl.checked = catalogue.current?.reviewLlm !== false;
   applyProviderShape();
   applyEngineShape();
   const eng = selectedEngine();
@@ -820,6 +822,9 @@ $("#settings-save").onclick = async () => {
     provider: $("#settings-provider").value,
     model: $("#settings-model-select").value,
     engine,
+    ...($("#settings-review-llm")
+      ? { reviewLlm: $("#settings-review-llm").checked }
+      : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(selectedProvider()?.endpoint === true
       ? { endpoint: $("#settings-endpoint").value.trim() }

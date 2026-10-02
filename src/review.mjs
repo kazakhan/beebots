@@ -21,7 +21,6 @@ import { join } from "node:path";
 import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
 import { defaults as STRATEGY_DEFAULTS } from "./strategy-v2.mjs";
-import { engineUses } from "./engines.mjs";
 import { selfTune } from "./self-tune.mjs";
 import { VARIANT_NAMES } from "./analysis-variants.mjs";
 import {
@@ -463,19 +462,20 @@ const REVIEW_SYSTEM =
   '"proposals":[{"target":"...","current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
 export class TradeReview {
-  constructor({ store, laya, model, config, dataDir, engineId = null }) {
+  constructor({ store, laya, model, config, dataDir, reviewLlm = null }) {
     this.store = store;
     this.laya = laya;
     this.model = model;
     this.config = config;
     this.dataDir = dataDir;
-    this.engineId = engineId;
+    this.reviewLlm = reviewLlm;
   }
-  // Whether the selected engine includes an LLM. The LLM is the only component
-  // that can author new text; without it, Laya self-tunes by selection.
+  // Whether the hourly review uses the LLM, independent of the decision engine:
+  // Laya may decide every trade while the LLM authors the hourly review. When
+  // off, Laya self-tunes by selection.
   llmEnabled() {
-    const id = this.engineId?.();
-    return id ? engineUses(id, "llm") : true;
+    if (this.reviewLlm) return this.reviewLlm() !== false;
+    return this.config?.review?.llm !== false;
   }
   // The current value of one target, for the no-LLM self-tuner to step from.
   currentValue(target) {

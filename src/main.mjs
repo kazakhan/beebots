@@ -55,7 +55,7 @@ try {
     // Config may name a default engine; absent one, an install with Laya
     // disabled defaults to LLM-only, matching the pre-2.9 behaviour.
     defaultEngine:
-      config.engine ?? (config.layaEnabled === false ? "llm" : "laya+llm"),
+      config.engine ?? (config.layaEnabled === false ? "llm" : "laya"),
   });
   const laya = new Laya(
     config.layaSocket,
@@ -86,9 +86,9 @@ try {
     model,
     config,
     dataDir: config.dataDir,
-    // The LLM participates in the review only when the selected engine includes
-    // one; otherwise Laya self-tunes by selection.
-    engineId: () => engine?.engineId?.(),
+    // The hourly review uses the LLM by default, independent of the decision
+    // engine (Laya decides trades; the LLM authors the review).
+    reviewLlm: () => settings.reviewLlm(),
   });
   engine = new Engine({
     config,

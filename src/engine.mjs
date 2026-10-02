@@ -31,7 +31,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.2.2";
+const BUILD = "3.3.0";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -204,9 +204,9 @@ export class Engine {
     return base;
   }
   // The selected decision engine. Dashboard settings win; absent that, the
-  // owner's config.engine; absent that, the behaviour of the pre-2.9 runtime
-  // (Laya+LLM, or LLM-only when Laya is disabled) so an un-updated install
-  // keeps trading exactly as before.
+  // owner's config.engine; absent that, the pre-2.9 behaviour (Laya+LLM, or
+  // LLM-only when Laya is disabled) so a runtime constructed without a settings
+  // file keeps trading as before. A fresh install's Settings defaults to Laya.
   engineId() {
     const stored = this.settings?.engineValue?.();
     if (isEngine(stored)) return stored;
