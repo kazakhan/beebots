@@ -106,3 +106,21 @@ test("an off-menu or malformed choice is refused, not guessed at", () => {
   assert.equal(parseMove(""), null);
   assert.equal(parseMove(null), null);
 });
+
+test("the menu offers BUY only for eligible candidates", () => {
+  const menu = buildMenu({
+    candidates: [
+      { product: "AAA-USDC", setupEligible: true },
+      { product: "BBB-USDC", setupEligible: false },
+      { product: "CCC-USDC" },
+    ],
+    positions: [],
+    maxPositions: 3,
+  });
+  assert.ok(Object.hasOwn(menu, "BUY AAA-USDC"), "eligible is offered");
+  assert.ok(!Object.hasOwn(menu, "BUY BBB-USDC"), "near-miss is not offered");
+  assert.ok(
+    Object.hasOwn(menu, "BUY CCC-USDC"),
+    "a candidate with no flag is offered",
+  );
+});

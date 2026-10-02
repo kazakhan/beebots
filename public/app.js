@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.3.0";
+const EXPECTED_BUILD = "3.3.1";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -404,6 +404,11 @@ function render(s) {
   }
   // Long descriptive labels only suit the dialog's status line.
   const vendor = s.model?.cardTitle ?? s.model?.model ?? "Decision model";
+  // The card's "last decision" is attributed to whoever actually decided: a
+  // local System One engine (Laya/Jev) when it decides, else the LLM model.
+  const decider = ["jev", "laya"].includes(s.model?.engine)
+    ? (s.model?.engineLabel ?? String(s.model.engine))
+    : vendor;
   const warning = s.halt || s.health.error;
   $("#alert").hidden = !warning;
   if (s.halt)
@@ -422,7 +427,7 @@ function render(s) {
   $("#bots").innerHTML = s.bots
     .map(
       (b) =>
-        `<article class="bot ${flash[b.id] ?? ""}" style="--accent:var(--bee-${b.id});--accent-glow:var(--bee-${b.id}-glow)"><div class="bot-top"><img class="avatar" src="${portraits[b.id]}" alt="${esc(b.name)} bee portrait"><div><h2>${esc(b.name)}</h2><span class="style">${subtitles[b.id]}</span></div><span class="pill">${s.rules?.[b.id]?.paper ? "PAPER · " : ""}${positionsOf(b).length ? `${positionsOf(b).length} POSITION${positionsOf(b).length > 1 ? "S" : ""}` : "IN CASH"}</span></div><div class="bot-value"><strong>${money(b.equity)}</strong><span class="${b.returnPct >= 0 ? "positive" : "negative"}">${pct(b.returnPct)}</span></div><div class="metrics"><div><small>CASH / USDC</small><b>${money(b.cash)}</b></div><div><small>REALISED P/L</small><b>${money(b.realised)}</b></div><div><small>FEES PAID</small><b>${money(b.fees)}</b></div><div title="Settled SELL orders after fees; breakeven sales excluded from W/L"><small>WIN / LOSS</small><b>${b.performance ? `${b.performance.wins}W / ${b.performance.losses}L` : "—"}</b>${b.performance?.breakeven ? `<small>${b.performance.breakeven} breakeven</small>` : ""}</div></div><div class="position">${renderPositions(b)}</div><div class="bot-chart" data-bot="${esc(b.id)}"></div><div class="call-label">${esc(vendor).toUpperCase()}’S LAST DECISION</div><p class="decision">${b.lastDecision ? `<b>${esc(b.lastDecision.action)}</b> · ${esc(b.lastDecision.reason)}` : "Waiting for first assessment"}</p></article>`,
+        `<article class="bot ${flash[b.id] ?? ""}" style="--accent:var(--bee-${b.id});--accent-glow:var(--bee-${b.id}-glow)"><div class="bot-top"><img class="avatar" src="${portraits[b.id]}" alt="${esc(b.name)} bee portrait"><div><h2>${esc(b.name)}</h2><span class="style">${subtitles[b.id]}</span></div><span class="pill">${s.rules?.[b.id]?.paper ? "PAPER · " : ""}${positionsOf(b).length ? `${positionsOf(b).length} POSITION${positionsOf(b).length > 1 ? "S" : ""}` : "IN CASH"}</span></div><div class="bot-value"><strong>${money(b.equity)}</strong><span class="${b.returnPct >= 0 ? "positive" : "negative"}">${pct(b.returnPct)}</span></div><div class="metrics"><div><small>CASH / USDC</small><b>${money(b.cash)}</b></div><div><small>REALISED P/L</small><b>${money(b.realised)}</b></div><div><small>FEES PAID</small><b>${money(b.fees)}</b></div><div title="Settled SELL orders after fees; breakeven sales excluded from W/L"><small>WIN / LOSS</small><b>${b.performance ? `${b.performance.wins}W / ${b.performance.losses}L` : "—"}</b>${b.performance?.breakeven ? `<small>${b.performance.breakeven} breakeven</small>` : ""}</div></div><div class="position">${renderPositions(b)}</div><div class="bot-chart" data-bot="${esc(b.id)}"></div><div class="call-label">${esc(decider).toUpperCase()}’S LAST DECISION</div><p class="decision">${b.lastDecision ? `<b>${esc(b.lastDecision.action)}</b> · ${esc(b.lastDecision.reason)}${b.lastDecision.executed === false && b.lastDecision.refusal ? ` · <span class="negative">not executed: ${esc(b.lastDecision.refusal)}</span>` : ""}` : "Waiting for first assessment"}</p></article>`,
     )
     .join("");
   document.querySelectorAll(".bot").forEach((card, index) => {

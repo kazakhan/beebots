@@ -318,6 +318,29 @@ test("an expected refusal is logged as a veto, not an error", async () => {
     0,
     "the refusal is not an error",
   );
+  // The card must show that the chosen BUY was not executed.
+  const d = s.read().bots.breakout.lastDecision;
+  assert.equal(d.action, "BUY");
+  assert.equal(d.executed, false);
+  assert.match(d.refusal, /Depth impact/);
+  s.close();
+});
+
+test("a submitted decision records executed", async () => {
+  const { s, engine } = fixture({ engine: "laya+llm" });
+  engine.execute = async () => "order-1";
+  engine.model.decide = async () => ({
+    action: "BUY",
+    product: "AAA-USDC",
+    reason: "enter",
+    model: "m",
+    provider: null,
+  });
+  await engine.cycle();
+  const d = s.read().bots.breakout.lastDecision;
+  assert.equal(d.action, "BUY");
+  assert.equal(d.executed, true);
+  assert.equal(d.refusal, null);
   s.close();
 });
 

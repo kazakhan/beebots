@@ -31,7 +31,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.0";
+const BUILD = "3.3.1";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -202,6 +202,28 @@ export class Engine {
     const over = readJsonOverride(this.config.dataDir, "runtime", null);
     if (over && !validateParams("runtime", over)) Object.assign(base, over);
     return base;
+  }
+  // Record what actually happened to a decision after execution, so the card
+  // cannot show a BUY that was refused without saying so.
+  noteOutcome(id, action, executed, refusal) {
+    this.store.change(
+      (s) => {
+        const d = s.bots[id]?.lastDecision;
+        if (d)
+          s.bots[id].lastDecision = {
+            ...d,
+            executed,
+            refusal: refusal ?? null,
+          };
+      },
+      "status",
+      {
+        bot: id,
+        message: executed
+          ? `${action} executed`
+          : `${action} not executed: ${refusal}`,
+      },
+    );
   }
   // The selected decision engine. Dashboard settings win; absent that, the
   // owner's config.engine; absent that, the pre-2.9 behaviour (Laya+LLM, or
@@ -797,35 +819,64 @@ export class Engine {
           if (this.stopped) return;
           if (["BUY", "SELL"].includes(d.action)) {
             const f = analyzed.find((f) => f.product === d.product);
-            if (Date.now() - f.at > this.config.maxAnalysisAgeMs) {
+            if (!f || Date.now() - f.at > this.config.maxAnalysisAgeMs) {
               this.store.event("veto", {
                 bot: id,
                 reason: "Analysis expired before execution",
               });
+              this.noteOutcome(
+                id,
+                d.action,
+                false,
+                "Analysis expired before execution",
+              );
               continue;
             }
-            await this.serial(() => {
-              const live = this.store.read().bots[id];
-              const current = Array.isArray(live.positions)
-                ? live.positions.find((p) => p.product === d.product)
-                : null;
-              const snapshotPos = positions.find(
-                (p) => p.product === d.product,
-              );
-              if (
-                d.action === "SELL" &&
-                (!current ||
-                  current.opened !== snapshotPos?.opened ||
-                  current.quantity !== snapshotPos?.quantity)
-              ) {
-                this.store.event("veto", {
-                  bot: id,
-                  reason: "Position changed during agent assessment",
-                });
-                return;
-              }
-              return this.execute(id, d.action, d.product, d.reason, f);
-            });
+            try {
+              await this.serial(async () => {
+                const live = this.store.read().bots[id];
+                const current = Array.isArray(live.positions)
+                  ? live.positions.find((p) => p.product === d.product)
+                  : null;
+                const snapshotPos = positions.find(
+                  (p) => p.product === d.product,
+                );
+                if (
+                  d.action === "SELL" &&
+                  (!current ||
+                    current.opened !== snapshotPos?.opened ||
+                    current.quantity !== snapshotPos?.quantity)
+                ) {
+                  this.store.event("veto", {
+                    bot: id,
+                    reason: "Position changed during agent assessment",
+                  });
+                  this.noteOutcome(
+                    id,
+                    d.action,
+                    false,
+                    "Position changed during agent assessment",
+                  );
+                  return;
+                }
+                const orderId = await this.execute(
+                  id,
+                  d.action,
+                  d.product,
+                  d.reason,
+                  f,
+                );
+                if (orderId) this.noteOutcome(id, d.action, true, null);
+              });
+            } catch (e) {
+              // A refusal is a normal decline; annotate the card and stop here so
+              // the outer catch does not double-log it.
+              if (isRefusal(e)) {
+                this.store.event("veto", { bot: id, reason: e.message });
+                this.noteOutcome(id, d.action, false, e.message);
+                this.setError(`analysis:${id}`, null);
+              } else throw e;
+            }
           }
         } catch (e) {
           // A refusal (thin book, slippage over budget, entry no longer
@@ -1224,7 +1275,7 @@ export class Engine {
           throw Error("Actual fee rate unavailable");
         this.store.acknowledge(order.id, "paper-" + order.id);
         this.store.applyOrder(order.id, paperFill(order, q, rate));
-        return;
+        return order.id;
       }
       const r = await this.exchange.create({
         client_order_id: order.id,
@@ -1234,13 +1285,15 @@ export class Engine {
       });
       if (r.success === false) {
         this.store.reject(order.id);
-        return;
+        return null;
       }
       const exchangeId = r.success_response?.order_id;
       if (!exchangeId) throw Error("No exchange order acknowledgement");
       this.store.acknowledge(order.id, exchangeId);
+      return order.id;
     } catch {
       this.store.unknown(order.id);
+      return null;
     }
   }
   async reconcileOrders() {

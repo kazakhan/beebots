@@ -14,6 +14,34 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.1] - 2026-10-02 - The card names the decider and shows refused entries
+
+Two live fixes: the bot card always credited the LLM even when Laya decided, and
+it showed "BUY" for a decision the risk layer then refused, with nothing saying
+the order was never placed.
+
+### Fixed
+
+- **The card names the actual decider.** Laya (or Jev) when the engine decides
+  locally; otherwise the LLM model name. The coverage cost line still names the
+  LLM, since it is about LLM calls.
+- **A decision records its outcome.** `executed: true` on a submitted order, or
+  `executed: false` with `refusal` on a refusal; the card renders
+  `BUY · not executed: <reason>`. Previously `lastDecision` was written before
+  execution, so a refused entry still read as BUY.
+- **Only executable entries are offered.** `buildMenu` gates `BUY` on
+  `setupEligible !== false`, so a System One engine cannot pick a move the
+  eligibility gate will immediately refuse. Near-misses stay in the LLM's
+  evidence.
+
+### Verification
+
+- 248 Node tests pass, up from 246: the menu omits non-eligible candidates, a
+  refused decision records `executed:false` + `refusal`, and a submitted one
+  records `executed:true`.
+
+---
+
 ## [3.3.0] - 2026-10-02 - Laya decides; the LLM is for the hourly review
 
 Per-decision LLM calls (roughly 1,150/day at a 5-minute cadence across four bots)

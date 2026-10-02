@@ -105,7 +105,10 @@ export function buildMenu({
     if (held.has(c.product)) {
       menu[`SELL ${c.product}`] = `Close the ${c.product} position now`;
       menu[`HOLD ${c.product}`] = `Keep the ${c.product} position open`;
-    } else if (room) {
+    } else if (room && c.setupEligible !== false) {
+      // Only offer an executable entry. A near-miss stays available as evidence
+      // for the LLM, but a System One engine must not be able to pick a move
+      // the risk layer will immediately refuse.
       menu[`BUY ${c.product}`] = `Enter a new long ${c.product} position`;
     }
   }
