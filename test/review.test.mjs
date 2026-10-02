@@ -466,3 +466,79 @@ test("the hourly state is aggregated and bounded under load", () => {
   assert.match(state, /\(\+100 more decisions\)/);
   assert.match(state, /momentum: regime uptrend:900/);
 });
+
+test("without an LLM the review self-tunes from Laya's answers", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-selftune-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({
+        answers: {
+          primary_bottleneck: { choice: "momentum" },
+          momentum_quality: { score: 0 },
+        },
+      }),
+    };
+    let modelCalls = 0;
+    const model = {
+      review: async () => {
+        modelCalls++;
+        return { data: {} };
+      },
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      engineId: () => "laya",
+    });
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(modelCalls, 0, "the LLM is not consulted");
+    assert.ok(
+      rec.proposals.some((p) => p.target === "params.momentum"),
+      "a bounded self-tune proposal",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("with an LLM the review sees Laya's verdict, not the raw hour", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-review-llm-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    let seen = null;
+    const model = {
+      review: async (sys, user) => {
+        seen = user;
+        return { data: { proposals: [] } };
+      },
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      engineId: () => "laya+llm",
+    });
+    await reviewer.run({ since: 0, until: 3600000, coverage: null });
+    assert.ok(seen.includes("LAYA'S REVIEW"), "Laya's verdict is supplied");
+    assert.ok(!seen.includes("LAYA LABELS"), "the raw hour is not");
+    assert.ok(seen.includes("CURRENT TARGETS"));
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

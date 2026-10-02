@@ -1,5 +1,6 @@
 import net from "node:net";
 import { readJsonOverride } from "./overrides.mjs";
+import { isVariant, variantQuestions } from "./analysis-variants.mjs";
 
 // The default trading-classification questions Laya answers per candidate. The
 // Trade Review may override these; the heads and answer types are fixed so the
@@ -35,9 +36,13 @@ export function defaultAnalysisQuestions(style) {
   };
 }
 
-// Merge an override onto the defaults so a partial file still works.
-export function resolveAnalysisQuestions(style, override) {
-  const base = defaultAnalysisQuestions(style);
+// Merge an override onto the defaults so a partial file still works. When a
+// variant is named (the no-LLM analysis policy), its pre-authored question set is
+// the base instead of the bundled default.
+export function resolveAnalysisQuestions(style, override, variant = null) {
+  const base = isVariant(variant)
+    ? variantQuestions(style, variant)
+    : defaultAnalysisQuestions(style);
   if (!override || typeof override !== "object") return base;
   return {
     regime: { ...base.regime, ...override.regime },
@@ -57,6 +62,13 @@ export class Laya {
     return this.dataDir
       ? readJsonOverride(this.dataDir, "laya.analysisQuestions", null)
       : null;
+  }
+  // The selected analysis policy variant, if a valid one is stored.
+  analysisVariant() {
+    const p = this.dataDir
+      ? readJsonOverride(this.dataDir, "laya.analysisPolicy", null)
+      : null;
+    return isVariant(p?.variant) ? p.variant : null;
   }
   request(body, timeoutMs = this.timeoutMs) {
     return new Promise((resolve, reject) => {
@@ -207,6 +219,7 @@ export class Laya {
       const questions = resolveAnalysisQuestions(
         style,
         this.questionsOverride(),
+        this.analysisVariant(),
       );
       const r = await this.request({ state: compact, questions }, deadline);
       const regimeChoices = Object.keys(questions.regime.criteria ?? {});

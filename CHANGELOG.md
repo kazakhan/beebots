@@ -14,6 +14,47 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.2.0] - 2026-10-02 - Laya reviews, the LLM authors; Laya self-tunes when there is no LLM
+
+Reworked the self-improvement loop around the System One + optional System 2
+split. Laya - now on a 1,024-token context - reviews the hour against a rubric
+and returns a compact verdict; the LLM (only when the selected engine includes
+one) authors the changes from that verdict, never from the raw hour. With no
+LLM, Laya self-tunes by selection.
+
+### Changed
+
+- **Laya reviews the hour.** The review rubric is enriched: per-bot quality
+  scores (`breakout_quality`, `trend_quality`, `momentum_quality`), plus
+  `laya_question_coverage`, `laya_evidence_focus` and `primary_bottleneck`,
+  alongside the existing heads. This verdict is what feeds the tuner.
+- **The LLM sees Laya's verdict, not the hour.** When the engine is `llm`,
+  `jev+llm` or `laya+llm` (the `engine` selector is now the "is the LLM enabled"
+  switch), the review prompt is Laya's answers + the Dice scoreboard + the
+  current targets + the schema. The raw decision stream no longer reaches it.
+- **No LLM -> Laya self-tunes by selection** (`src/self-tune.mjs`). It picks a
+  pre-authored analysis variant and steps a whitelisted number by **one** bounded
+  step, then the same schema validation, gate and auto-revert apply. Bot rubrics
+  are prose and stay LLM-only.
+
+### Added
+
+- **Analysis-variant library** (`src/analysis-variants.mjs`): `balanced`,
+  `strict`, `loose`, `trend_focus`, `momentum_focus`, `breakout_focus` - full
+  `regime`/`fit`/`quality` question sets, selected via the new
+  `laya.analysisPolicy` override (bound by `validatePolicy`).
+- `clampParam` keeps every stepped value inside its schema bound (and rounds
+  float debris).
+
+### Verification
+
+- 240 Node tests pass, up from 229: variant shape and resolution, the self-tuner
+  (one step, clamping, variant selection, no-op), policy validation/clamping, and
+  the two review paths (LLM sees the verdict and not the hour; no-LLM self-tunes
+  without calling the model).
+
+---
+
 ## [3.1.1] - 2026-10-02 - Reviews stop timing out: a bounded hour and a review timeout
 
 The 3.1.0 cadence/candidate increase made the review's hourly context explode - a

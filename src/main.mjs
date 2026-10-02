@@ -86,6 +86,9 @@ try {
     model,
     config,
     dataDir: config.dataDir,
+    // The LLM participates in the review only when the selected engine includes
+    // one; otherwise Laya self-tunes by selection.
+    engineId: () => engine?.engineId?.(),
   });
   engine = new Engine({
     config,

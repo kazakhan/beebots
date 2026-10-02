@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   validateParams,
   validateOverride,
+  validatePolicy,
+  clampParam,
   targetAllowed,
   PARAM_SCHEMA,
 } from "../src/overrides.mjs";
@@ -73,4 +75,37 @@ test("validateOverride routes numeric targets through the schema", () => {
 test("the schema bounds are sane", () => {
   for (const [k, r] of Object.entries(PARAM_SCHEMA))
     if (r.min !== undefined) assert.ok(r.min <= r.max, `${k} min<=max`);
+});
+
+test("the analysis policy accepts a known variant and rejects unknown fields", () => {
+  assert.equal(
+    validateOverride(
+      "laya.analysisPolicy",
+      JSON.stringify({ variant: "strict" }),
+    ),
+    null,
+  );
+  assert.match(
+    validateOverride(
+      "laya.analysisPolicy",
+      JSON.stringify({ variant: "nope" }),
+    ),
+    /variant must be one of/,
+  );
+  assert.match(
+    validateOverride(
+      "laya.analysisPolicy",
+      JSON.stringify({ variant: "balanced", capital: 1 }),
+    ),
+    /not a tunable policy field/,
+  );
+  assert.ok(targetAllowed("laya.analysisPolicy"));
+});
+
+test("clampParam keeps stepped values inside the schema", () => {
+  assert.equal(clampParam("params.trend", "minBreadth", 0), 1);
+  assert.equal(clampParam("params.trend", "minBreadth", 999), 100);
+  assert.equal(clampParam("params.trend", "riskPct", 99), 3);
+  assert.equal(clampParam("params.trend", "minBreadth", 5.4), 5); // int rounds
+  assert.equal(clampParam("runtime", "maxCandidates", 999), 50);
 });

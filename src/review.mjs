@@ -21,6 +21,9 @@ import { join } from "node:path";
 import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
 import { defaults as STRATEGY_DEFAULTS } from "./strategy-v2.mjs";
+import { engineUses } from "./engines.mjs";
+import { selfTune } from "./self-tune.mjs";
+import { VARIANT_NAMES } from "./analysis-variants.mjs";
 import {
   ALLOWED_TARGETS,
   targetAllowed,
@@ -29,6 +32,7 @@ import {
   readJsonOverride,
   validateOverride,
   validateParams,
+  validatePolicy,
   PARAM_KEYS,
   PARAM_SCHEMA,
   RUNTIME_KEYS,
@@ -110,6 +114,67 @@ export const REVIEW_QUESTIONS = {
       neutral: "Laya added little either way",
       misleading: "Laya's labels pointed away from the outcomes",
       insufficient: "Too few resolved outcomes to judge",
+    },
+  },
+  breakout_quality: {
+    type: "score",
+    instructions:
+      "Score the quality of Scout's breakout decisions this hour - were eligible " +
+      "setups taken, weak setups declined, and losses avoidable?",
+    criteria: ["poor", "weak", "fair", "good"],
+  },
+  trend_quality: {
+    type: "score",
+    instructions:
+      "Score the quality of Keeper's trend decisions this hour - entries, exits " +
+      "and whether it held winners or cut them early.",
+    criteria: ["poor", "weak", "fair", "good"],
+  },
+  momentum_quality: {
+    type: "score",
+    instructions:
+      "Score the quality of Spark's momentum decisions this hour - candidate " +
+      "selection, entries and exits.",
+    criteria: ["poor", "weak", "fair", "good"],
+  },
+  laya_question_coverage: {
+    type: "choice",
+    instructions:
+      "Are the analysis questions Laya was asked this hour (regime/fit/quality) " +
+      "pitched at the right strictness for this market?",
+    criteria: {
+      too_strict: "Pitched too strict: good setups were classified weak",
+      balanced: "About right",
+      too_loose: "Pitched too loose: weak setups were classified strong",
+      insufficient_evidence: "Too little evidence to judge",
+    },
+  },
+  laya_evidence_focus: {
+    type: "choice",
+    instructions:
+      "Which evidence would most improve Laya's classifications for this system?",
+    criteria: {
+      trend: "Trend structure (EMAs, higher highs/lows)",
+      momentum: "Relative strength and momentum persistence",
+      volatility: "Volatility and range compression",
+      volume: "Volume and participation",
+      quality: "Data completeness and consistency",
+      none: "No change needed",
+    },
+  },
+  primary_bottleneck: {
+    type: "choice",
+    instructions:
+      "What single thing most limited results this hour? Judge against the " +
+      "scoreboard versus Dice.",
+    criteria: {
+      breakout: "Scout's breakout rules",
+      trend: "Keeper's trend rules",
+      momentum: "Spark's momentum rules",
+      control: "The control arm needs no tuning",
+      laya: "Laya's classifications",
+      risk: "Risk/sizing or execution refusals",
+      none: "Nothing material",
     },
   },
 };
@@ -377,12 +442,12 @@ const REVIEW_SYSTEM =
   "target: a bot's written rubric, Laya's question sets, and the numeric " +
   "strategy parameters (entry gates, risk, cadence, candidate cap, signal " +
   "timeframe, Scout's universe categories) and the runtime knobs. Two jobs: " +
-  "(1) judge the bots against the hour's decisions, outcomes and the per-arm " +
-  "scoreboard versus Dice; (2) judge Laya itself - do its classifications track " +
-  "outcomes, and is it being asked the right questions? You are given the " +
-  "decisions, Laya's classifications and performance, the eligible setups, the " +
-  "fills, the per-arm scoreboard, the allowed numeric ranges, and the CURRENT " +
-  "value of every editable target. Propose at most 2 changes. Each proposal's " +
+  "(1) judge the bots against Laya's rubric-based review of the hour and the " +
+  "per-arm scoreboard versus Dice; (2) judge Laya itself - do its classifications " +
+  "track outcomes, and is it being asked the right questions? You are given " +
+  "Laya's review of the hour and the per-arm scoreboard, the allowed numeric " +
+  "ranges, and the CURRENT value of every editable target. Propose at most 2 " +
+  "changes. Each proposal's " +
   "`proposed` field MUST be the COMPLETE replacement - the full rubric text " +
   "(with heading), the full question-set JSON, or the full numeric JSON - the " +
   "exact shape of `current`; `current` must be the exact value you are " +
@@ -396,12 +461,29 @@ const REVIEW_SYSTEM =
   '"proposals":[{"target":"...","current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
 export class TradeReview {
-  constructor({ store, laya, model, config, dataDir }) {
+  constructor({ store, laya, model, config, dataDir, engineId = null }) {
     this.store = store;
     this.laya = laya;
     this.model = model;
     this.config = config;
     this.dataDir = dataDir;
+    this.engineId = engineId;
+  }
+  // Whether the selected engine includes an LLM. The LLM is the only component
+  // that can author new text; without it, Laya self-tunes by selection.
+  llmEnabled() {
+    const id = this.engineId?.();
+    return id ? engineUses(id, "llm") : true;
+  }
+  // The current value of one target, for the no-LLM self-tuner to step from.
+  currentValue(target) {
+    if (target.startsWith("params."))
+      return this.paramView(target.slice("params.".length));
+    if (target === "laya.analysisPolicy") {
+      const over = readJsonOverride(this.dataDir, "laya.analysisPolicy", null);
+      return over && !validatePolicy(over) ? over : { variant: "balanced" };
+    }
+    return {};
   }
   reviewQuestions() {
     return readJsonOverride(
@@ -459,6 +541,11 @@ export class TradeReview {
     for (const id of [...STRATEGY_ARMS, CONTROL_ARM])
       out[`params.${id}`] = JSON.stringify(this.paramView(id), null, 1);
     out.runtime = JSON.stringify(this.runtimeView(), null, 1);
+    out["laya.analysisPolicy"] = JSON.stringify(
+      this.currentValue("laya.analysisPolicy"),
+      null,
+      1,
+    );
     return out;
   }
   // The allowed numeric ranges, so the model proposes in-bounds values.
@@ -477,7 +564,9 @@ export class TradeReview {
       "ALLOWED NUMERIC RANGES\nparams.<bot>: " +
       fmt(PARAM_SCHEMA) +
       "\nruntime: " +
-      fmt(RUNTIME_SCHEMA)
+      fmt(RUNTIME_SCHEMA) +
+      "\nlaya.analysisPolicy.variant: one of " +
+      VARIANT_NAMES.join(", ")
     );
   }
   // One hourly pass: gather the hour, let Laya classify it, let the model propose
@@ -517,44 +606,62 @@ export class TradeReview {
       proposals = [],
       error = null;
     if (!laya.error) {
-      const targets = this.currentTargets();
-      const user =
-        state +
-        "\n\nLAYA ANSWERS\n" +
-        JSON.stringify(laya.answers, null, 1) +
-        "\n\nCURRENT TARGETS\n" +
-        JSON.stringify(targets, null, 1) +
-        "\n\n" +
-        this.schemaText();
-      try {
-        const r = await this.model.review(
-          REVIEW_SYSTEM,
-          user,
-          this.config?.review?.timeoutMs ?? 300000,
-        );
-        summary = typeof r.data?.summary === "string" ? r.data.summary : null;
-        observations = Array.isArray(r.data?.observations)
-          ? r.data.observations.slice(0, 6)
-          : [];
-        proposals = Array.isArray(r.data?.proposals)
-          ? r.data.proposals.slice(
-              0,
-              Math.max(1, Number(this.config?.review?.maxProposals) || 2),
-            )
-          : [];
+      if (this.llmEnabled()) {
+        // The LLM authors changes, but sees only Laya's verdict - never the raw
+        // hour. Laya digests; the LLM decides and writes text.
+        const user =
+          "LAYA'S REVIEW\n" +
+          JSON.stringify(laya.answers, null, 1) +
+          "\n\nSCOREBOARD\n" +
+          scoreboardLines(s.orders).join("\n") +
+          "\n\nCURRENT TARGETS\n" +
+          JSON.stringify(this.currentTargets(), null, 1) +
+          "\n\n" +
+          this.schemaText();
         try {
-          this.store.recordModelCall({
-            day: new Date(until).toISOString().slice(0, 10),
-            provider: r.provider,
-            model: r.model,
-            usage: usageCounts(r.usage),
-            costNanos: costOf(r.usage, r.provider, r.model, until),
-          });
-        } catch {
-          // Budget accounting is telemetry; never fail the review over it.
+          const r = await this.model.review(
+            REVIEW_SYSTEM,
+            user,
+            this.config?.review?.timeoutMs ?? 300000,
+          );
+          summary = typeof r.data?.summary === "string" ? r.data.summary : null;
+          observations = Array.isArray(r.data?.observations)
+            ? r.data.observations.slice(0, 6)
+            : [];
+          proposals = Array.isArray(r.data?.proposals)
+            ? r.data.proposals.slice(
+                0,
+                Math.max(1, Number(this.config?.review?.maxProposals) || 2),
+              )
+            : [];
+          try {
+            this.store.recordModelCall({
+              day: new Date(until).toISOString().slice(0, 10),
+              provider: r.provider,
+              model: r.model,
+              usage: usageCounts(r.usage),
+              costNanos: costOf(r.usage, r.provider, r.model, until),
+            });
+          } catch {
+            // Budget accounting is telemetry; never fail the review over it.
+          }
+        } catch (e) {
+          error = e.message;
         }
-      } catch (e) {
-        error = e.message;
+      } else {
+        // No LLM: Laya self-tunes - it selects a pre-authored analysis variant
+        // and steps a whitelisted number by one bounded step.
+        try {
+          proposals = selfTune({
+            answers: laya.answers,
+            current: (t) => this.currentValue(t),
+          });
+          summary = proposals.length
+            ? `Laya self-tune: ${proposals.length} bounded change(s)`
+            : "Laya self-tune: no change needed";
+        } catch (e) {
+          error = e.message;
+        }
       }
     }
     const sample = closedTrades(s.orders);

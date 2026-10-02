@@ -7,10 +7,12 @@
 // to the bundled default rather than breaking the runtime.
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { isVariant, VARIANT_NAMES } from "./analysis-variants.mjs";
 
 export const OVERRIDES = {
   "laya.reviewQuestions": "laya-review-questions.json",
   "laya.analysisQuestions": "laya-analysis-questions.json",
+  "laya.analysisPolicy": "laya-analysis-policy.json",
   "rubric.breakout": "breakout.md",
   "rubric.trend": "trend.md",
   "rubric.momentum": "momentum.md",
@@ -79,6 +81,42 @@ function boundError(key, value, rule) {
   return null;
 }
 
+// Validate Laya's analysis policy (a variant plus optional bounded knobs).
+export function validatePolicy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return "An analysis policy must be a JSON object";
+  if (!isVariant(value.variant))
+    return `variant must be one of ${VARIANT_NAMES.join(", ")}`;
+  for (const key of Object.keys(value))
+    if (!["variant", "fitFloor", "requireQuality"].includes(key))
+      return `${key} is not a tunable policy field`;
+  if (value.fitFloor !== undefined) {
+    const n = Number(value.fitFloor);
+    if (!Number.isFinite(n) || n < 0 || n > 2)
+      return "fitFloor must be between 0 and 2";
+  }
+  if (
+    value.requireQuality !== undefined &&
+    !["complete", "mixed", "any"].includes(value.requireQuality)
+  )
+    return "requireQuality must be complete, mixed or any";
+  return null;
+}
+
+// Clamp a numeric param to its schema bound (used by the no-LLM self-tuner, so a
+// stepped value can never leave the envelope even if a rule is miscalculated).
+export function clampParam(target, key, value) {
+  const schema = target === "runtime" ? RUNTIME_SCHEMA : PARAM_SCHEMA;
+  const rule = schema[key];
+  if (!rule || rule.enum || rule.list) return value;
+  let n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  n = Math.max(rule.min, Math.min(rule.max, n));
+  if (rule.int) return Math.round(n);
+  // Avoid float debris from a fractional step (0.35 + 0.05 -> 0.4, not 0.3999...).
+  return Math.round(n * 1e6) / 1e6;
+}
+
 // Validate a numeric params/runtime object against its schema. Unknown keys are
 // refused so the model cannot smuggle in capital, mode, leverage or anything
 // else that is not explicitly tunable.
@@ -141,6 +179,16 @@ export function validateOverride(target, text, { invariantsHold } = {}) {
       return "A numeric override must be valid JSON";
     }
     return validateParams(target, d);
+  }
+  // Laya's analysis policy: a variant choice plus optional knobs.
+  if (target === "laya.analysisPolicy") {
+    let d;
+    try {
+      d = JSON.parse(text);
+    } catch {
+      return "An analysis policy must be valid JSON";
+    }
+    return validatePolicy(d);
   }
   if (target.startsWith("rubric.")) {
     if (!/^\s*#/.test(text))
