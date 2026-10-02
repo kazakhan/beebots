@@ -12,6 +12,7 @@
 // score; code maps that answer to an action. The LLM path keeps its JSON
 // contract. One catalogue here means the runtime, the settings file and the
 // dashboard agree on the same list and on which components each engine uses.
+import { entryEligible } from "./strategy-v2.mjs";
 
 export const ENGINES = {
   jev: {
@@ -88,11 +89,13 @@ export const CONVICTION_LABELS = ["very weak", "weak", "moderate", "strong"];
 
 const MOVE = /^(BUY|SELL|HOLD) (\S+)$/;
 
-// The valid moves for one bot this cycle. One BUY per eligible, non-held product
-// while below the position limit; SELL or HOLD per held product; SKIP always.
-// Held products are read from `positions`, not from the candidate flags, so a
-// candidate that is both held and dropped from view cannot produce a BUY.
+// The valid moves for one bot this cycle. One BUY per product the bot would
+// actually enter right now (entryEligible), while below the position limit;
+// SELL or HOLD per held product; SKIP always. Held products are read from
+// `positions`, not from the candidate flags, so a candidate that is both held
+// and dropped from view cannot produce a BUY.
 export function buildMenu({
+  id = null,
   candidates = [],
   positions = [],
   maxPositions = 1,
@@ -105,10 +108,12 @@ export function buildMenu({
     if (held.has(c.product)) {
       menu[`SELL ${c.product}`] = `Close the ${c.product} position now`;
       menu[`HOLD ${c.product}`] = `Keep the ${c.product} position open`;
-    } else if (room && c.setupEligible !== false) {
-      // Only offer an executable entry. A near-miss stays available as evidence
-      // for the LLM, but a System One engine must not be able to pick a move
-      // the risk layer will immediately refuse.
+    } else if (
+      room &&
+      (id ? entryEligible(id, c) : c.setupEligible !== false)
+    ) {
+      // Only offer an executable entry: the offered set equals the accepted set,
+      // so a System One engine cannot pick a move the risk layer will refuse.
       menu[`BUY ${c.product}`] = `Enter a new long ${c.product} position`;
     }
   }

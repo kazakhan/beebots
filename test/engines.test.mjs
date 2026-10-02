@@ -124,3 +124,27 @@ test("the menu offers BUY only for eligible candidates", () => {
     "a candidate with no flag is offered",
   );
 });
+
+test("with an id the menu offers BUY only for entry-eligible candidates", () => {
+  const base = {
+    setupEligible: true,
+    ask: 100,
+    maxEntry: 101,
+    stopPrice: 95,
+    bid: 100.5,
+    channelHigh: 99,
+  };
+  const eligible = { product: "AAA-USDC", ...base };
+  const extended = { product: "BBB-USDC", ...base, ask: 102 };
+  const lostChannel = { product: "CCC-USDC", ...base, bid: 98 };
+  const menu = buildMenu({
+    id: "breakout",
+    candidates: [eligible, extended, lostChannel],
+    positions: [],
+    maxPositions: 3,
+  });
+  assert.ok(Object.hasOwn(menu, "BUY AAA-USDC"));
+  assert.ok(!Object.hasOwn(menu, "BUY BBB-USDC"), "extended excluded");
+  assert.ok(!Object.hasOwn(menu, "BUY CCC-USDC"), "lost channel excluded");
+  assert.ok(Object.hasOwn(menu, "SKIP"));
+});

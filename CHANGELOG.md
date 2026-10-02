@@ -14,6 +14,34 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.2] - 2026-10-03 - The offered move set equals the accepted move set
+
+Laya repeatedly chose BUY for coins the engine then refused ("Entry no longer
+qualifies"), so the card showed a decision that never became an order. The
+refusal was instant, not a price change: the menu was offering coins the engine
+would already not enter.
+
+### Fixed
+
+- **The action menu now offers a BUY only for a candidate the engine would
+  actually enter right now** - live ask within `maxEntry`, above `stopPrice`, and
+  for Scout the bid still above `channelHigh` (the same `entryEligible` check
+  `execute` uses). A System One engine can no longer be handed a move the risk
+  layer immediately refuses. (`buildMenu` takes the bot `id`.)
+- **The refusal reason is now exact**, replacing the misleading "Entry no longer
+  qualifies": `Setup no longer qualifies`, `Entry too extended (ask past the max
+entry)`, `Entry below the stop`, `Breakout lost the channel`, or `Analysis
+expired before execution`. The card (3.3.1) shows it as
+  `BUY · not executed: <reason>`.
+
+### Verification
+
+- 250 Node tests pass, up from 248: the menu offers BUY only for entry-eligible
+  candidates (extended-at-ask and lost-channel excluded), `entryRejection` names
+  each failing condition, and the stale-analysis message is now explicit.
+
+---
+
 ## [3.3.1] - 2026-10-02 - The card names the decider and shows refused entries
 
 Two live fixes: the bot card always credited the LLM even when Laya decided, and

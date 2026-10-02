@@ -10,6 +10,7 @@ import {
   evaluate,
   rankMomentum,
   entryEligible,
+  entryRejection,
   executionPlan,
 } from "../src/strategy-v2.mjs";
 import { migrateConfig } from "../src/migrate-v2.mjs";
@@ -112,10 +113,7 @@ test("v2 pipeline risk-sizes independent candidates and persists interval dedupl
   assert.equal(calls, 0);
   assert.equal(s.read().assessments?.breakout, undefined);
   // Visible, not silent: an empty snapshot still records a SKIP.
-  assert.match(
-    s.read().bots.breakout.lastDecision?.reason ?? "",
-    /warming/,
-  );
+  assert.match(s.read().bots.breakout.lastDecision?.reason ?? "", /warming/);
   market.snapshot = readySnapshot;
   await e.cycle();
   assert.equal(submitted.length, 3);
@@ -992,4 +990,24 @@ test("Scout's warm-up is tunable via minSignalBars", () => {
       ),
     /warming/,
   );
+});
+
+test("entryRejection names the exact failing condition", () => {
+  const base = {
+    setupEligible: true,
+    ask: 100,
+    maxEntry: 101,
+    stopPrice: 95,
+    bid: 100.5,
+    channelHigh: 99,
+  };
+  assert.equal(entryRejection("breakout", base), null);
+  assert.equal(entryEligible("breakout", base), true);
+  assert.match(
+    entryRejection("breakout", { ...base, setupEligible: false }),
+    /Setup/,
+  );
+  assert.match(entryRejection("breakout", { ...base, ask: 102 }), /extended/);
+  assert.match(entryRejection("breakout", { ...base, stopPrice: 101 }), /stop/);
+  assert.match(entryRejection("breakout", { ...base, bid: 98 }), /channel/);
 });

@@ -16,6 +16,7 @@ import {
   executionPlan,
   VERSION,
   defaults as STRATEGY_DEFAULTS,
+  entryRejection,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
 import { readJsonOverride, validateParams } from "./overrides.mjs";
@@ -31,7 +32,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.1";
+const BUILD = "3.3.2";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -689,6 +690,7 @@ export class Engine {
               const read = await this.jev.decide({
                 state: this.engineState(id, analyzed, bot),
                 menu: buildMenu({
+                  id,
                   candidates: analyzed,
                   positions,
                   maxPositions,
@@ -735,6 +737,7 @@ export class Engine {
             // moves. Jev and Laya share the contract; a failed call holds the
             // bot, exactly as a missing model would.
             const menu = buildMenu({
+              id,
               candidates: analyzed,
               positions,
               maxPositions,
@@ -1142,13 +1145,19 @@ export class Engine {
       policy = null,
       takerFee = null;
     if (side === "BUY") {
-      if (
-        !evidence ||
-        Date.now() - evidence.at > this.config.maxAnalysisAgeMs ||
-        // The control arm has no setup to qualify; its randomness is the point.
-        (!evidence.control && !eligibility(id, { ...evidence, ...q }, rules))
-      )
-        throw refuse("Entry no longer qualifies");
+      if (!evidence) throw refuse("No entry evidence");
+      if (Date.now() - evidence.at > this.config.maxAnalysisAgeMs)
+        throw refuse("Analysis expired before execution");
+      // The control arm has no setup to qualify; its randomness is the point.
+      if (!evidence.control && !eligibility(id, { ...evidence, ...q }, rules)) {
+        const merged = { ...evidence, ...q };
+        // Say exactly which entry condition failed, rather than implying a
+        // change that did not happen.
+        const why = evidence.strategyVersion
+          ? (entryRejection(id, merged) ?? "Entry no longer qualifies")
+          : "Entry no longer qualifies";
+        throw refuse(why);
+      }
       // Re-check capacity and duplicates against live state: another cycle may
       // have filled a slot while this decision was being assessed.
       const held = Array.isArray(bot.positions) ? bot.positions : [];

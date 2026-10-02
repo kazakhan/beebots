@@ -284,14 +284,19 @@ export function rankMomentum(rows, rules = {}) {
   }
   return rows;
 }
+// Why a candidate is not an executable entry, or null when it is. Used both to
+// decide eligibility and to state the exact reason a chosen entry was declined.
+export function entryRejection(id, f) {
+  if (f.setupEligible !== true) return "Setup no longer qualifies";
+  if (!(Number.isFinite(f.ask) && f.ask <= f.maxEntry))
+    return "Entry too extended (ask past the max entry)";
+  if (!(f.ask > f.stopPrice)) return "Entry below the stop";
+  if (id === "breakout" && !(f.bid > f.channelHigh))
+    return "Breakout lost the channel";
+  return null;
+}
 export function entryEligible(id, f) {
-  return (
-    f.setupEligible === true &&
-    Number.isFinite(f.ask) &&
-    f.ask <= f.maxEntry &&
-    f.ask > f.stopPrice &&
-    (id !== "breakout" || f.bid > f.channelHigh)
-  );
+  return entryRejection(id, f) === null;
 }
 export function walk(levels, quantity) {
   let remaining = quantity,

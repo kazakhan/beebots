@@ -100,7 +100,7 @@ test("stale analysis cannot become an order", async () => {
       ...evidence(),
       at: 0,
     }),
-    /qualifies/,
+    /Analysis expired before execution/,
   );
   assert.equal(f.submissions, 0);
   f.store.close();
