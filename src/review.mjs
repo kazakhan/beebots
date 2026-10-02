@@ -455,8 +455,10 @@ const REVIEW_SYSTEM =
   "outside is refused. Rubrics must retain their safety clauses: no shorts, " +
   "Laya is uncalibrated evidence not a decision or probability, code controls " +
   "size and execution, do not alter stops, do not force trades. Capital, mode, " +
-  "leverage and disabling stops are never changeable. If nothing is worth " +
-  "changing, return an empty proposals list. Return only JSON: " +
+  "leverage and disabling stops are never changeable. To undo one of your own " +
+  "applied changes, propose {target, revert:true, rationale} when the applied- " +
+  "change ledger shows it is losing to Dice. If nothing is worth changing, " +
+  "return an empty proposals list. Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
   '"proposals":[{"target":"...","current":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
@@ -576,9 +578,9 @@ export class TradeReview {
       .recent(2000)
       .filter((e) => e.ts >= since && e.ts < until);
     const s = this.store.read();
-    // Close the loop first: any earlier change that is now losing to Dice is
-    // reverted before we consider new proposals.
-    this.revertLosers(s.orders, until);
+    // With no LLM, Laya's controller reverts losers before we consider new
+    // proposals. With an LLM, the LLM decides reverts from the ledger below.
+    if (!this.llmEnabled()) this.revertLosers(s.orders, until);
     const perf = layaPerformance({
       events: this.store.recent(5000),
       orders: s.orders,
@@ -614,6 +616,8 @@ export class TradeReview {
           JSON.stringify(laya.answers, null, 1) +
           "\n\nSCOREBOARD\n" +
           scoreboardLines(s.orders).join("\n") +
+          "\n\nAPPLIED CHANGES (your prior edits and their effect)\n" +
+          JSON.stringify(this.appliedLedger(s.orders), null, 1) +
           "\n\nCURRENT TARGETS\n" +
           JSON.stringify(this.currentTargets(), null, 1) +
           "\n\n" +
@@ -666,18 +670,34 @@ export class TradeReview {
     }
     const sample = closedTrades(s.orders);
     const reviewed = proposals.map((p) => {
-      const gate = evaluateGate({
-        proposal: p,
-        sample,
-        minSample: this.config?.review?.minSample,
-        requireControl: this.config?.review?.requireControl,
-      });
+      const isRevert = p?.revert === true;
+      // A revert restores a prior known value, so it is not sample-gated; it
+      // only has to name an allowed target.
+      const gate = isRevert
+        ? targetAllowed(p.target)
+          ? { ok: true, reasons: [], tier: "revert" }
+          : {
+              ok: false,
+              reasons: [`Target ${p.target} is out of scope`],
+              tier: "revert",
+            }
+        : evaluateGate({
+            proposal: p,
+            sample,
+            minSample: this.config?.review?.minSample,
+            requireControl: this.config?.review?.requireControl,
+          });
       let applied = false;
       if (gate.ok && autoApply) {
         try {
-          this.apply(p);
+          if (isRevert) {
+            this.revert(p.target);
+            this.forgetChange(p.target);
+          } else {
+            this.apply(p);
+            this.recordChange(p);
+          }
           applied = true;
-          this.recordChange(p);
         } catch (e) {
           gate.reasons.push(e.message);
         }
@@ -783,6 +803,44 @@ export class TradeReview {
       },
       "change",
       { message: `Tracking applied change ${proposal.target}`, arm },
+    );
+  }
+  // The loop's own track record: each applied change and its realised effect
+  // against Dice since it was applied. This is what the LLM judges to decide
+  // whether to keep, refine, or revert its own edits.
+  appliedLedger(orders) {
+    const s = this.store.read();
+    const changes = Array.isArray(s.appliedChanges) ? s.appliedChanges : [];
+    const trips = closedRoundTrips(orders);
+    return changes.map((c) => {
+      const arm = (trips[c.arm] ?? []).filter((t) => t.closed >= c.appliedAt);
+      const dice = (trips[CONTROL_ARM] ?? []).filter(
+        (t) => t.closed >= c.appliedAt,
+      );
+      const pnl = arm.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      const dicePnl = dice.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      return {
+        target: c.target,
+        arm: c.arm,
+        ageHours: Math.round((Date.now() - c.appliedAt) / 3600000),
+        trades: arm.length,
+        wins: arm.filter((t) => t.pnl > 0n).length,
+        pnl: Number(pnl.toFixed(2)),
+        dicePnl: Number(dicePnl.toFixed(2)),
+        delta: Number((pnl - dicePnl).toFixed(2)),
+      };
+    });
+  }
+  // Drop a reverted change from the ledger so it is not judged again.
+  forgetChange(target) {
+    this.store.change(
+      (st) => {
+        st.appliedChanges = (st.appliedChanges ?? []).filter(
+          (c) => c.target !== target,
+        );
+      },
+      "change",
+      { message: `Reverted applied change ${target}` },
     );
   }
   // Auto-revert an applied change that has had time to prove itself and is

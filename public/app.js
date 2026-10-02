@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.2.0";
+const EXPECTED_BUILD = "3.2.1";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -279,7 +279,7 @@ function renderReview(s) {
         const gate = p.gate?.ok
           ? `Applied (${esc(p.gate.tier ?? "")})`
           : esc((p.gate?.reasons ?? []).join("; ")) || "Not applied";
-        return `<div class="proposal ${p.applied ? "applied" : "rejected"}"><h4>${esc(p.target)} · ${p.applied ? "APPLIED" : "NOT APPLIED"}${p.gate?.tier ? ` · ${esc(p.gate.tier)}` : ""}</h4><p>${esc(p.rationale)}</p>${p.risk ? `<p class="note">risk: ${esc(p.risk)}</p>` : ""}${p.proposed ? `<details><summary>current → proposed (full text)</summary><p class="note">current</p><pre>${esc(String(p.current ?? "(none)"))}</pre><p class="note">proposed</p><pre>${esc(String(p.proposed))}</pre></details>` : ""}<p class="gate">${gate}${p.applied ? ` <button class="revert" data-target="${esc(p.target)}" type="button">Revert</button>` : ""}</p></div>`;
+        return `<div class="proposal ${p.applied ? "applied" : "rejected"}"><h4>${esc(p.target)} · ${p.applied ? "APPLIED" : "NOT APPLIED"}${p.gate?.tier ? ` · ${esc(p.gate.tier)}` : ""}</h4><p>${esc(p.rationale)}</p>${p.risk ? `<p class="note">risk: ${esc(p.risk)}</p>` : ""}${p.proposed ? `<details><summary>current → proposed (full text)</summary><p class="note">current</p><pre>${esc(String(p.current ?? "(none)"))}</pre><p class="note">proposed</p><pre>${esc(String(p.proposed))}</pre></details>` : ""}<p class="gate">${gate}</p></div>`;
       })
       .join("");
   else if (!r.error && !r.laya?.error)
@@ -951,24 +951,9 @@ $("#login-dialog").addEventListener("keydown", (e) => {
     void submitLogin();
   }
 });
-// Owner controls for the self-improvement loop: revert an applied change, or
-// clear a stuck halt. Both require the login.
+// Owner control for a stuck halt (operational safety, not the self-improvement
+// loop - the loop keeps or reverts its own changes).
 document.addEventListener("click", async (e) => {
-  const rev = e.target.closest?.(".revert");
-  if (rev) {
-    rev.disabled = true;
-    const r = await authFetch(
-      "api/review/revert",
-      control({ target: rev.dataset.target }),
-    ).catch(() => null);
-    if (!r || !r.ok) {
-      rev.disabled = false;
-      rev.textContent = "Revert failed";
-      return;
-    }
-    await refresh();
-    return;
-  }
   const halt = e.target.closest?.("#clear-halt");
   if (halt) {
     halt.disabled = true;

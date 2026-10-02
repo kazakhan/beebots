@@ -14,6 +14,35 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.2.1] - 2026-10-02 - The loop decides reverts; there is no manual revert
+
+A revert is a decision of the self-improvement loop, not a button. The manual
+Revert control added in 3.1.0 was wrong for a recursive system and is gone.
+
+### Changed
+
+- **Removed the manual revert path entirely**: the dashboard Revert button, its
+  click handler, and the `api/review/revert` endpoint. (`api/halt/clear` and
+  `npm run reset-control` remain - they are owner-only operational safety, not
+  self-improvement.)
+- **The loop reverts its own changes.** Every review now includes a ledger of
+  applied changes and their realised effect against Dice (trades, wins, P&L,
+  delta, age). The LLM may propose `{target, revert:true, rationale}` to undo one
+  of its own edits; a revert restores the prior value, is recorded, and bypasses
+  the sample gate (it restores rather than experiments).
+- **Authority follows the `engine` switch.** With an LLM, the LLM decides
+  reverts and the deterministic controller does not run; with no LLM, Laya's
+  controller decides them (the only automatic path, since a System One model
+  cannot author).
+
+### Verification
+
+- 242 Node tests pass, up from 240: the LLM can revert its own applied change
+  (override removed, ledger cleared), the deterministic controller is not run in
+  LLM mode, and the change ledger reaches the review prompt.
+
+---
+
 ## [3.2.0] - 2026-10-02 - Laya reviews, the LLM authors; Laya self-tunes when there is no LLM
 
 Reworked the self-improvement loop around the System One + optional System 2

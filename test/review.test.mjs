@@ -536,6 +536,10 @@ test("with an LLM the review sees Laya's verdict, not the raw hour", async () =>
     await reviewer.run({ since: 0, until: 3600000, coverage: null });
     assert.ok(seen.includes("LAYA'S REVIEW"), "Laya's verdict is supplied");
     assert.ok(!seen.includes("LAYA LABELS"), "the raw hour is not");
+    assert.ok(
+      seen.includes("APPLIED CHANGES"),
+      "the change ledger is supplied",
+    );
     assert.ok(seen.includes("CURRENT TARGETS"));
   } finally {
     store.close();
