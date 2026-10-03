@@ -14,6 +14,30 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.4.2] - 2026-10-04 - More candidates per cycle (100), batched
+
+The 32-candidate cap was the per-bot engine slice, not the data: the collector
+already evaluates every eligible product. Now that analysis is batched, the cap
+is raised and the two things that would have made it slow are fixed.
+
+### Changed
+
+- **`maxCandidates` raised from 32 to 100** (owner-set, still not review-tunable).
+- **`analyzeBatch` chunks larger sets into requests of at most 32** (the daemon's
+  per-request cap) and merges the answers, so >32 candidates still run in one
+  pass per chunk instead of falling back to serial calls.
+- **Only entry-eligible and held candidates are quoted live.** A non-eligible
+  candidate can never produce a BUY (`buildMenu` gates on `entryEligible`, which
+  needs bid/ask), so it is analysed without a quote. This keeps the cycle cost
+  tied to the eligible count plus `N/32 × ~4 s`, not to the whole slice.
+
+### Verification
+
+- 280 Node tests pass, up from 279: chunking 40 candidates into two ≤32 requests,
+  and the cap pinned at 100.
+
+---
+
 ## [3.4.1] - 2026-10-04 - Review patches apply; not-applied proposals show orange
 
 3.4.0 told the model to return compact patch **objects** (e.g.

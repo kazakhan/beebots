@@ -51,6 +51,9 @@ export function resolveAnalysisQuestions(style, override, variant = null) {
   };
 }
 
+// The daemon's per-request batch cap (laya_serve BATCH_CAP). Larger sets are
+// chunked to this size.
+const BATCH_MAX = 32;
 // Candidate evidence compacted for the checkpoint. Shared by the single and the
 // batched path so both send exactly the same fields.
 const COMPACT_KEYS = [
@@ -305,31 +308,48 @@ export class Laya {
   // so one bad row degrades that candidate, never the bot.
   async analyzeBatch(candidates, style, timeoutMs = this.timeoutMs) {
     if (!candidates?.length)
-      return { results: [], queue_depth: 0, elapsed_s: 0 };
+      return { results: [], queue_depth: 0, elapsed_s: 0, batch_size: 0 };
     const questions = resolveAnalysisQuestions(
       style,
       this.questionsOverride(),
       this.analysisVariant(),
     );
-    const items = candidates.map((s) => ({
-      state: compactState(s),
-      questions,
-    }));
-    const r = await this.batch(items, timeoutMs);
-    if (!Array.isArray(r?.batch)) throw Error("Unexpected Laya batch response");
-    const results = candidates.map((_, i) => {
-      const res = r.batch[i];
-      if (!res || res.ok !== true)
-        return { error: res?.error ?? "batch item failed" };
-      const err = answerError(questions, res.answers);
-      if (err) return { error: err };
-      return { answers: res.answers, elapsed_s: res.elapsed_s ?? null };
-    });
+    const states = candidates.map((s) => compactState(s));
+    const results = [];
+    let queue_depth = 0,
+      elapsed_s = 0,
+      batch_size = 0;
+    // The daemon caps one request at BATCH_MAX; split larger sets into
+    // sequential chunks (the GPU runs one inference at a time anyway) and merge.
+    for (let i = 0; i < states.length; i += BATCH_MAX) {
+      const chunk = states.slice(i, i + BATCH_MAX);
+      const r = await this.batch(
+        chunk.map((state) => ({ state, questions })),
+        timeoutMs,
+      );
+      if (!Array.isArray(r?.batch) || r.batch.length !== chunk.length)
+        throw Error("Unexpected Laya batch response");
+      for (const res of r.batch) {
+        if (!res || res.ok !== true) {
+          results.push({ error: res?.error ?? "batch item failed" });
+          continue;
+        }
+        const err = answerError(questions, res.answers);
+        results.push(
+          err
+            ? { error: err }
+            : { answers: res.answers, elapsed_s: res.elapsed_s ?? null },
+        );
+      }
+      queue_depth = Math.max(queue_depth, r.queue_depth ?? 0);
+      elapsed_s += Number(r.elapsed_s) || 0;
+      batch_size += r.batch_size ?? chunk.length;
+    }
     return {
       results,
-      queue_depth: r.queue_depth ?? 0,
-      elapsed_s: r.elapsed_s ?? null,
-      batch_size: r.batch_size ?? items.length,
+      queue_depth,
+      elapsed_s: Number(elapsed_s.toFixed(3)),
+      batch_size,
     };
   }
 }

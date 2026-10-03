@@ -39,7 +39,7 @@ being better than luck.
   4-hour/250-bar stack needed ~41 days of history and starved every other market;
   do not reintroduce it.
 
-- **`maxCandidates` is fixed at 32 and is not review-tunable.** It is a
+- **`maxCandidates` is fixed at 100 and is not review-tunable.** It is a
   structural cap (how many candidates a bot may assess), so it is locked: not in
   the tunable keys, not in CURRENT TARGETS, pinned in `effectiveRules`/
   `effectiveRuntime`, and any proposal that sets it is refused. The owner set it;
@@ -91,9 +91,11 @@ new strategy. `maxCandidates` is never review-tunable.
 ## Batch analysis
 
 The Laya daemon supports a batched request (`{"batch":[…]}`) and advertises
-`batch_ready`. The engine sends one batch per bot cycle and maps the answers
-back, so 32 candidates cost one forward pass instead of 32. If the daemon does
-not support batching or the batch fails, the engine falls back to serial calls.
+`batch_ready`. The engine sends batches of at most 32 per bot cycle (chunking larger sets,
+since the daemon caps one request at 32) and maps the answers back. Only
+entry-eligible and held candidates are quoted live; non-eligible ones are
+analysed but never offered a BUY. If the daemon does not support batching or a
+batch fails, the engine falls back to serial calls.
 
 ## Control baseline (Dice)
 

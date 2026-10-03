@@ -199,3 +199,42 @@ test("analyzeBatch isolates a bad row without failing the batch", async () => {
     await f.close();
   }
 });
+
+test("analyzeBatch chunks more than 32 candidates into multiple requests", async () => {
+  let requests = 0;
+  const f = await fixture((s) =>
+    s.on("data", (data) => {
+      const req = JSON.parse(data);
+      if (req.batch) {
+        requests++;
+        s.write(
+          JSON.stringify({
+            ok: true,
+            batch: req.batch.map(() => ({
+              ok: true,
+              answers: {
+                fit: { score: 1 },
+                regime: { choice: "range" },
+                quality: { choice: "mixed" },
+              },
+            })),
+            elapsed_s: 0.2,
+            queue_depth: 1,
+            batch_size: req.batch.length,
+          }) + "\n",
+        );
+      }
+    }),
+  );
+  try {
+    const candidates = Array.from({ length: 40 }, (_, i) => ({
+      product: "P" + i,
+    }));
+    const r = await new Laya(f.path, 500).analyzeBatch(candidates, "trend");
+    assert.equal(r.results.length, 40);
+    assert.equal(requests, 2, "40 candidates split into two <=32 requests");
+    assert.ok(r.results.every((x) => x.answers?.fit?.score === 1));
+  } finally {
+    await f.close();
+  }
+});
