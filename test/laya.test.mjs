@@ -291,3 +291,57 @@ test("analyzeBatch falls back to serial for a chunk the daemon rejects", async (
     await f.close();
   }
 });
+
+test("batch is serialised behind other Laya calls", async () => {
+  let active = 0,
+    max = 0;
+  const f = await fixture((s) =>
+    s.on("data", (data) => {
+      const req = JSON.parse(data);
+      active++;
+      max = Math.max(max, active);
+      setTimeout(() => {
+        if (req.ping)
+          s.write(
+            JSON.stringify({ ok: true, ready: true, queue_depth: 0 }) + "\n",
+          );
+        else if (req.batch)
+          s.write(
+            JSON.stringify({
+              ok: true,
+              batch: req.batch.map(() => ({
+                ok: true,
+                answers: {
+                  fit: { score: 1 },
+                  regime: { choice: "range" },
+                  quality: { choice: "mixed" },
+                },
+              })),
+            }) + "\n",
+          );
+        else
+          s.write(
+            JSON.stringify({
+              ok: true,
+              answers: {
+                fit: { score: 1 },
+                regime: { choice: "range" },
+                quality: { choice: "mixed" },
+              },
+            }) + "\n",
+          );
+        active--;
+      }, 30);
+    }),
+  );
+  try {
+    const l = new Laya(f.path, 2000);
+    await Promise.all([
+      l.analyze({ product: "A" }, "trend"),
+      l.analyzeBatch([{ product: "B" }], "trend"),
+    ]);
+    assert.equal(max, 1, "no two Laya requests run at once");
+  } finally {
+    await f.close();
+  }
+});

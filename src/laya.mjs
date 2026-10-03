@@ -307,9 +307,15 @@ export class Laya {
     return p;
   }
   // One request carrying many candidates that share a question set (one bot's
-  // cycle). The daemon groups by questions and runs a single forward pass.
+  // cycle). Serialised behind the same `tail` as analyze/ask/decide so the single
+  // GPU never runs two requests at once - a batch that slipped past the queue
+  // would contend for the daemon lock, inflate queue_depth (false "congested"),
+  // and make the other call wait past its deadline.
   batch(items, timeoutMs = this.timeoutMs) {
-    return this.request({ batch: items }, timeoutMs);
+    const run = () => this.request({ batch: items }, timeoutMs);
+    const p = this.tail.then(run);
+    this.tail = p.catch(() => {});
+    return p;
   }
   // Classify many candidates for one bot in one inference. Returns results
   // aligned to `candidates`; each item is `{ answers, elapsed_s }` or `{ error }`,

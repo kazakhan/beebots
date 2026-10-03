@@ -14,6 +14,29 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.4.5] - 2026-10-04 - Serialise Laya batches; no more false congestion
+
+3.4.0 added `batch()` on a direct socket call that bypassed the `tail` queue that
+`analyze`/`ask`/`decide` use. So a batch could run concurrently with a decision
+or analysis on the single GPU: they contended for the daemon's inference lock,
+the batch waited past its deadline (`Laya response deadline exceeded`), and the
+daemon's `queue_depth` (bumped by the batch size) made the serial fallback's ping
+report `Laya queue congested; analysis deferred`.
+
+### Fixed
+
+- **`batch()` now runs through the same `tail`** as every other Laya call, so the
+  daemon never sees two requests at once: no queue contention, no inflated
+  `queue_depth`, no false congestion, and batches no longer wait behind a
+  concurrent decision.
+
+### Verification
+
+- 287 Node tests pass, up from 286: a batch and an analysis issued together never
+  run at the same time on the daemon.
+
+---
+
 ## [3.4.4] - 2026-10-04 - Bound the decision prompt; harden the Laya link
 
 3.4.2 raised `maxCandidates` to 100, but the whole analysed set was then sent to
