@@ -383,7 +383,12 @@ test("aggregation never invents incomplete 15 minute bars", () => {
   assert.equal(aggregate(rows, 900).length, 1);
 });
 test("Scout uses a prior range and rejects chasing (any category)", () => {
-  const f = evaluate("breakout", scoutFrame(), {}, { category: "meme" });
+  const f = evaluate(
+    "breakout",
+    scoutFrame(),
+    { strategy: "range_breakout" },
+    { category: "meme" },
+  );
   assert.equal(f.channelHigh, 100.5);
   assert.equal(f.relativeVolume, 5);
   assert.equal(f.setupEligible, true, "Keeper core + range breakout");
@@ -885,7 +890,7 @@ function scoutFrame({
 }
 const meme = { category: "meme" };
 const scout = (f, rules = defaults.breakout) =>
-  evaluate("breakout", f, rules, meme);
+  evaluate("breakout", f, { ...rules, strategy: "range_breakout" }, meme);
 
 test("Scout shares Keeper's core, with its own breakout trigger", () => {
   assert.equal(defaults.breakout.pullbackBars, 15);
@@ -988,7 +993,40 @@ test("a bot runs the strategy template it is assigned", () => {
 });
 
 test("defaults carry a strategy template for every bot", () => {
-  assert.equal(defaults.breakout.strategy, "range_breakout");
+  assert.equal(defaults.breakout.strategy, "momentum_rotation_fast");
   assert.equal(defaults.trend.strategy, "trend_pullback");
-  assert.equal(defaults.momentum.strategy, "momentum_continuation");
+  assert.equal(defaults.momentum.strategy, "momentum_leaders");
+});
+
+test("the rotation ranking keeps only the top-3 leaders", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    product: "P" + i,
+    rankTime: 1,
+    setupEligible: true,
+    reasons: [],
+    momentum24hPct: 10 - i,
+    momentum7dPct: 10 - i,
+  }));
+  rankMomentum(
+    rows,
+    { minBreadth: 2 },
+    { count: 3, keys: ["momentum24hPct", "momentum7dPct"] },
+  );
+  const leaders = rows
+    .filter((x) => x.setupEligible)
+    .map((x) => x.product)
+    .sort();
+  assert.deepEqual(leaders, ["P0", "P1", "P2"]);
+});
+
+test("the fast rotation computes the 4h-24h momentum", () => {
+  const frames = { five: scoutFrame().five, hour: risingHour(), four: [] };
+  const f = evaluate(
+    "momentum",
+    frames,
+    { strategy: "momentum_rotation_fast" },
+    meme,
+  );
+  assert.ok(Number.isFinite(f.return4hPct), "4h momentum set");
+  assert.ok(Number.isFinite(f.momentum24hPct), "24h momentum set");
 });

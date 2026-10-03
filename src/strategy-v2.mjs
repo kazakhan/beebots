@@ -5,21 +5,33 @@ export const VERSION = "2.0.0";
 // may assign to a bot (`params.<bot>.strategy`). Each maps to a trigger below.
 export const STRATEGY_POOL = {
   trend_pullback: { label: "Trend pullback (Keeper)" },
-  range_breakout: { label: "Range breakout (Scout)" },
-  momentum_continuation: { label: "Momentum continuation (Spark)" },
+  momentum_leaders: { label: "Momentum leaders (7d)" },
+  momentum_rotation_fast: { label: "Momentum rotation (4h-24h)" },
   mean_reversion: { label: "Mean reversion" },
   breakout_retest: { label: "Breakout retest" },
   volatility_compression: { label: "Volatility compression" },
   range_mean_return: { label: "Range mean return" },
 };
 export const DEFAULT_STRATEGY = {
-  breakout: "range_breakout",
+  breakout: "momentum_rotation_fast",
   trend: "trend_pullback",
-  momentum: "momentum_continuation",
+  momentum: "momentum_leaders",
 };
 // Per-template defaults, merged under the bot defaults, so any bot can run any
 // template even if its own defaults omit the fields that template reads.
 export const TEMPLATE_DEFAULTS = {
+  momentum_leaders: {
+    maxExtensionAtr: 0.5,
+    minSignalBars: 4,
+    topFraction: 0.2,
+    minBreadth: 10,
+  },
+  momentum_rotation_fast: {
+    maxExtensionAtr: 0.5,
+    minSignalBars: 0,
+    topFraction: 0.2,
+    minBreadth: 10,
+  },
   range_breakout: {
     rangeBars: 24,
     rangeAtr: 6,
@@ -53,7 +65,7 @@ export const TEMPLATE_DEFAULTS = {
 };
 export const defaults = {
   breakout: {
-    strategy: "range_breakout",
+    strategy: "momentum_rotation_fast",
     rangeBars: 24,
     // Loosened in 2.3.0. The live coverage panel showed genuine breakouts held
     // back by four independent edges at once: compressionAtr 4.13-5.30 against a
@@ -96,7 +108,7 @@ export const defaults = {
     maxCandidates: 25,
   },
   momentum: {
-    strategy: "momentum_continuation",
+    strategy: "momentum_leaders",
     topFraction: 0.2,
     minBreadth: 10,
     riskPct: 1,
@@ -241,7 +253,46 @@ export function evaluate(id, frames, rules, membership) {
   const fail = (condition, reason) => {
     if (!condition) f.reasons.push(reason);
   };
-  if (strat === "range_breakout") {
+  if (strat === "momentum_leaders") {
+    if ((h?.length ?? 0) < 200 || bars.length < (Number(r.minSignalBars) || 4))
+      throw Error("Momentum-leaders history warming");
+    const a = atr(h),
+      hp = h.map((x) => x.close);
+    f.atr = a;
+    f.hourClose = hp.at(-1);
+    f.momentum24hPct = (hp.at(-1) / hp.at(-25) - 1) * 100;
+    f.momentum7dPct = (hp.at(-1) / hp.at(-169) - 1) * 100;
+    // No pullback/breakout gate: the ranking marks the top-3 leaders eligible.
+    fail(
+      f.momentum7dPct > 0 && f.momentum24hPct > 0,
+      "Momentum not positive on both horizons",
+    );
+    fail(hp.at(-1) > ema(hp, 20), "Price below hourly EMA20");
+    f.stopPrice = close - 2 * a;
+    fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = 0;
+    f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "momentum_rotation_fast") {
+    if ((h?.length ?? 0) < 30 || bars.length < (Number(r.minSignalBars) || 0))
+      throw Error("Momentum-rotation history warming");
+    const a = atr(h),
+      hp = h.map((x) => x.close);
+    f.atr = a;
+    f.hourClose = hp.at(-1);
+    f.return4hPct = (hp.at(-1) / hp.at(-5) - 1) * 100;
+    f.momentum24hPct = (hp.at(-1) / hp.at(-25) - 1) * 100;
+    fail(
+      f.return4hPct > 0 && f.momentum24hPct > 0,
+      "Momentum not positive on 4h and 24h",
+    );
+    fail(hp.at(-1) > ema(hp, 20), "Price below hourly EMA20");
+    f.stopPrice = close - 2 * a;
+    fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = 0;
+    f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "range_breakout") {
     const minBars = Number(r.minSignalBars) || 120;
     if (bars.length < Math.max(minBars, 15) || (h?.length ?? 0) < 60)
       throw Error(
@@ -388,7 +439,11 @@ export function evaluate(id, frames, rules, membership) {
   f.setupEligible = f.reasons.length === 0;
   return f;
 }
-export function rankMomentum(rows, rules = {}) {
+export function rankMomentum(
+  rows,
+  rules = {},
+  { count = null, keys = ["momentum24hPct", "momentum7dPct"] } = {},
+) {
   const r = { ...defaults.momentum, ...rules };
   // Rank only the same completed hour, never mix stale and new intervals.
   const latest = Math.max(0, ...rows.map((x) => x.rankTime));
@@ -398,17 +453,18 @@ export function rankMomentum(rows, rules = {}) {
       ? 0
       : cohort.filter((y) => y[key] < x[key]).length / (cohort.length - 1);
   for (const f of rows) {
-    f.rankScore = (pct("momentum24hPct", f) + pct("momentum7dPct", f)) / 2;
+    f.rankScore = keys.reduce((n, k) => n + pct(k, f), 0) / keys.length;
     f.breadth = cohort.length;
   }
   const ranked = [...cohort].sort(
     (a, b) => b.rankScore - a.rankScore || a.product.localeCompare(b.product),
   );
-  const top = new Set(
-    ranked
-      .slice(0, Math.max(1, Math.ceil(cohort.length * r.topFraction)))
-      .map((x) => x.product),
-  );
+  // `count` = an explicit top-K leader set (the rotation templates); otherwise
+  // the historical top-`topFraction` set.
+  const n = count
+    ? Math.max(1, count)
+    : Math.max(1, Math.ceil(cohort.length * r.topFraction));
+  const top = new Set(ranked.slice(0, n).map((x) => x.product));
   for (const f of rows) {
     f.rankPercentile = f.rankScore;
     if (

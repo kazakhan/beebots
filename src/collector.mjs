@@ -348,11 +348,20 @@ export class UniverseMarket extends Market {
   snapshot(id) {
     if (!id) return super.snapshot();
     const rules = this.rulesFor?.(id) ?? this.config.bots[id] ?? {};
+    const strat = rules.strategy ?? DEFAULT_STRATEGY[id];
+    // Momentum-leaders draws from the top-N market cap, like Dice; the other
+    // templates scan every eligible market.
+    const list =
+      strat === "momentum_leaders" && this.marketCap?.size
+        ? this.products.filter((p) =>
+            this.marketCap.has(String(p).split("-")[0].toUpperCase()),
+          )
+        : this.products;
     const rows = [];
     let warming = 0,
       rejected = 0,
       lastError = null;
-    for (const product of this.products) {
+    for (const product of list) {
       const frames = this.frames.get(product),
         entry = this.entries.get(product);
       if (!frames || Date.now() - frames.five.at(-1).time > 660000) {
@@ -395,12 +404,20 @@ export class UniverseMarket extends Market {
       lastError,
       markets: this.products.length,
     };
-    const strat = rules.strategy ?? DEFAULT_STRATEGY[id];
-    // Rank only the momentum-continuation strategy: if the review has assigned
-    // this bot a different template, ranking does not apply.
-    return id === "momentum" && strat === "momentum_continuation"
-      ? rankMomentum(rows, rules)
-      : rows;
+    // Rank by the template's horizon: the rotation templates keep the top-3
+    // leaders eligible; the legacy continuation keeps the top fraction.
+    if (strat === "momentum_leaders")
+      return rankMomentum(rows, rules, {
+        count: 3,
+        keys: ["momentum24hPct", "momentum7dPct"],
+      });
+    if (strat === "momentum_rotation_fast")
+      return rankMomentum(rows, rules, {
+        count: 3,
+        keys: ["return4hPct", "momentum24hPct"],
+      });
+    if (strat === "momentum_continuation") return rankMomentum(rows, rules);
+    return rows;
   }
   coverage() {
     const evidence = Object.fromEntries(

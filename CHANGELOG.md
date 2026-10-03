@@ -14,6 +14,39 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.5.0] - 2026-10-04 - Momentum-rotation strategies (Hive-style)
+
+The Hive's strongest bots are momentum rotations, and our Spark was a much
+stricter version of the same idea (leader **plus** a 1h pullback, resumption and
+a continuation breakout), so it barely traded. Spark and Scout now run
+rotation templates; Keeper keeps its pullback strategy.
+
+### Changed
+
+- **Spark default = `momentum_leaders`**: rank the top-100-by-market-cap universe
+  by a **24h + 7d** momentum blend and hold the **top 3** leaders. No
+  pullback/breakout gate. Exit as soon as a coin leaves the leader set.
+- **Scout default = `momentum_rotation_fast`**: rank the full eligible universe by
+  a **4h + 24h** blend (new `return4hPct`) and hold the **top 3**. Exit on losing
+  the leader set.
+- **Keeper default = `trend_pullback`** (unchanged; the review had drifted it to
+  `mean_reversion` - now reset).
+- `rankMomentum` gained an explicit top-K mode; `collector.snapshot` applies the
+  template's universe (top-100 for leaders, full for the rest) and its horizon.
+- `strategyExit` is keyed on the strategy, and the rotation templates exit when
+  the held coin is no longer a top-3 leader.
+- `range_breakout` and `momentum_continuation` were removed from the pool
+  (replaced); their code paths remain only for explicit/legacy use.
+- The three `params.*` overrides were reset (prose tuning deleted) so the new
+  defaults apply.
+
+### Verification
+
+- 290 Node tests pass, up from 287: top-3 rotation ranking, the 4h momentum
+  field, the leader-loss exit, and template dispatch.
+
+---
+
 ## [3.4.5] - 2026-10-04 - Serialise Laya batches; no more false congestion
 
 3.4.0 added `batch()` on a direct socket call that bypassed the `tail` queue that

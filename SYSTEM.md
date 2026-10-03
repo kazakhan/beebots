@@ -78,15 +78,23 @@ and must never be coupled:
 Each bot runs one **strategy template** from a fixed, pre-authored pool
 (`STRATEGY_POOL` in `strategy-v2.mjs`), selected by `params.<bot>.strategy`:
 
-`trend_pullback`, `range_breakout`, `momentum_continuation`, `mean_reversion`,
-`breakout_retest`, `volatility_compression`, `range_mean_return`.
+`trend_pullback` (Keeper), `momentum_leaders` (Spark), `momentum_rotation_fast`
+(Scout), `mean_reversion`, `breakout_retest`, `volatility_compression`,
+`range_mean_return`.
 
-`evaluate()` dispatches on the selected template. The defaults keep the three
-bots distinct. The Trade Review may reassign a bot to a different template, and
-is **required** to do so when the bot is flagged: after **10 closed trades**
-without beating Dice on realised P&L, the review replaces the losing strategy
-rather than nudging it. Open positions are left to resolve; new entries use the
-new strategy. `maxCandidates` is never review-tunable.
+The defaults keep the three bots distinct: **Keeper = `trend_pullback`**,
+**Spark = `momentum_leaders`** (blend of 24h + 7d momentum, top-3 leaders over
+the top-100 market cap), **Scout = `momentum_rotation_fast`** (4h + 24h
+momentum, top-3 leaders over the full universe). The rotation templates have no
+pullback/breakout gate: they hold the top-3 leaders and **exit as soon as a coin
+leaves the leader set** (which frees the slot to rotate into the new leader -
+Laya still chooses). `evaluate()` dispatches on the selected template.
+
+The Trade Review may reassign a bot to a different template, and is **required**
+to do so when the bot is flagged: after **10 closed trades** without beating Dice
+on realised P&L, the review replaces the losing strategy rather than nudging it.
+Open positions are left to resolve; new entries use the new strategy.
+`maxCandidates` is never review-tunable.
 
 ## Recent-close context (no cooldown)
 

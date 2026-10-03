@@ -346,3 +346,45 @@ test("decisionSubset caps the prompt and keeps held positions", () => {
     f.store.close();
   }
 });
+
+test("the rotation exit fires when the coin is no longer a leader", () => {
+  const f = fixture();
+  try {
+    const e = {
+      effectiveRules: () => ({ strategy: "momentum_leaders" }),
+      market: {
+        snapshot: () => [
+          {
+            product: "X-USDC",
+            signalTime: 2,
+            close: 100,
+            atr: 2,
+            setupEligible: false,
+          },
+        ],
+      },
+      store: { change: () => {} },
+    };
+    const p = {
+      product: "X-USDC",
+      cost: "100",
+      quantity: "1",
+      opened: 1,
+      policy: {
+        stopPrice: 90,
+        initialRisk: 5,
+        trailR: 2,
+        trailAtr: 2,
+        signalTime: 1,
+        lastBar: 1,
+        peakClose: 100,
+      },
+    };
+    assert.equal(
+      Engine.prototype.strategyExit.call(e, "momentum", p, { bid: 100 }),
+      "No longer a momentum leader",
+    );
+  } finally {
+    f.store.close();
+  }
+});
