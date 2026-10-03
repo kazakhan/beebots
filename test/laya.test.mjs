@@ -238,3 +238,56 @@ test("analyzeBatch chunks more than 32 candidates into multiple requests", async
     await f.close();
   }
 });
+
+test("request surfaces the daemon's error text", async () => {
+  const f = await fixture((s) =>
+    s.on("data", () =>
+      s.write(
+        JSON.stringify({ ok: false, error: "need state and questions" }) + "\n",
+      ),
+    ),
+  );
+  try {
+    await assert.rejects(
+      new Laya(f.path, 500).ping(),
+      /need state and questions/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("analyzeBatch falls back to serial for a chunk the daemon rejects", async () => {
+  const f = await fixture((s) =>
+    s.on("data", (data) => {
+      const req = JSON.parse(data);
+      if (req.ping)
+        return s.write(
+          JSON.stringify({ ok: true, ready: true, queue_depth: 0 }) + "\n",
+        );
+      if (req.batch)
+        return s.write(JSON.stringify({ ok: false, error: "boom" }) + "\n");
+      s.write(
+        JSON.stringify({
+          ok: true,
+          answers: {
+            fit: { score: 1 },
+            regime: { choice: "range" },
+            quality: { choice: "mixed" },
+          },
+          elapsed_s: 0.1,
+        }) + "\n",
+      );
+    }),
+  );
+  try {
+    const r = await new Laya(f.path, 500).analyzeBatch(
+      [{ product: "A" }],
+      "trend",
+    );
+    assert.equal(r.results.length, 1);
+    assert.equal(r.results[0].answers.fit.score, 1);
+  } finally {
+    await f.close();
+  }
+});

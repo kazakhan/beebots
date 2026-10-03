@@ -148,13 +148,21 @@ export class Laya {
           return finish(Error("Oversized Laya response"));
         const end = data.indexOf(10);
         if (end < 0) return;
+        let r;
         try {
-          const r = JSON.parse(data.subarray(0, end).toString("utf8"));
-          if (r.ok !== true) throw Error("Laya inference failed");
-          finish(null, r);
+          r = JSON.parse(data.subarray(0, end).toString("utf8"));
         } catch {
-          finish(Error("Invalid or unsuccessful Laya response"));
+          return finish(Error("Invalid Laya response"));
         }
+        if (r.ok !== true)
+          return finish(
+            Error(
+              r.error
+                ? `Laya error: ${r.error}`
+                : "Laya inference was not successful",
+            ),
+          );
+        finish(null, r);
       });
     });
   }
@@ -314,21 +322,45 @@ export class Laya {
       this.questionsOverride(),
       this.analysisVariant(),
     );
-    const states = candidates.map((s) => compactState(s));
     const results = [];
     let queue_depth = 0,
       elapsed_s = 0,
       batch_size = 0;
     // The daemon caps one request at BATCH_MAX; split larger sets into
     // sequential chunks (the GPU runs one inference at a time anyway) and merge.
-    for (let i = 0; i < states.length; i += BATCH_MAX) {
-      const chunk = states.slice(i, i + BATCH_MAX);
-      const r = await this.batch(
-        chunk.map((state) => ({ state, questions })),
-        timeoutMs,
-      );
-      if (!Array.isArray(r?.batch) || r.batch.length !== chunk.length)
-        throw Error("Unexpected Laya batch response");
+    // A chunk that fails is retried once, then falls back to serial calls for
+    // that chunk only - a bad chunk never forces the whole bot to serial.
+    const serial = async (chunk) => {
+      for (const c of chunk) {
+        try {
+          const a = await this.analyze(c, style, timeoutMs);
+          results.push({ answers: a.answers, elapsed_s: a.elapsed_s ?? null });
+        } catch (e) {
+          results.push({ error: e.message });
+        }
+      }
+    };
+    for (let i = 0; i < candidates.length; i += BATCH_MAX) {
+      const chunk = candidates.slice(i, i + BATCH_MAX);
+      const items = chunk.map((state) => ({
+        state: compactState(state),
+        questions,
+      }));
+      let r = null;
+      try {
+        r = await this.batch(items, timeoutMs);
+      } catch {
+        try {
+          r = await this.batch(items, timeoutMs);
+        } catch {
+          await serial(chunk);
+          continue;
+        }
+      }
+      if (!Array.isArray(r?.batch) || r.batch.length !== chunk.length) {
+        await serial(chunk);
+        continue;
+      }
       for (const res of r.batch) {
         if (!res || res.ok !== true) {
           results.push({ error: res?.error ?? "batch item failed" });

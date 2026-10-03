@@ -17,6 +17,7 @@ import {
   VERSION,
   defaults as STRATEGY_DEFAULTS,
   entryRejection,
+  entryEligible,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
 import { buildTimeframeLab } from "./timeframe-lab.mjs";
@@ -34,12 +35,16 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.4.3";
+const BUILD = "3.4.4";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
+// How many candidates go into the decision prompt. The analysis cap is 100, but
+// Laya's model context is 8192 tokens, so the decision (state + menu) is bounded
+// to a token-safe subset (held + eligible + top-ranked).
+const DECISION_CANDIDATES = 32;
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -274,6 +279,22 @@ export class Engine {
       };
     }
     return out;
+  }
+  // The candidates that go into the decision prompt, bounded so Laya's model
+  // context (8192 tokens) is not overrun by a 100-candidate analysis set. Held
+  // positions are always kept, then entry-eligible, then the analysed fit order.
+  decisionSubset(id, analyzed, positions) {
+    const held = new Set((positions ?? []).map((p) => p.product));
+    const cap = Math.max(DECISION_CANDIDATES, held.size);
+    const ordered = [...(analyzed ?? [])].sort((a, b) => {
+      const ha = held.has(a.product) ? 1 : 0,
+        hb = held.has(b.product) ? 1 : 0;
+      if (ha !== hb) return hb - ha;
+      const ea = entryEligible(id, a) ? 1 : 0,
+        eb = entryEligible(id, b) ? 1 : 0;
+      return eb - ea;
+    });
+    return ordered.slice(0, cap);
   }
   engineState(id, candidates, bot, recentCloses = {}) {
     const keys = [
@@ -821,6 +842,12 @@ export class Engine {
             rules.timeframe,
             runtime.reentryLookbackBars,
           );
+          // The decision only sees a bounded subset (analysis may have 100).
+          const decisionCandidates = this.decisionSubset(
+            id,
+            analyzed,
+            positions,
+          );
           const day = new Date().toISOString().slice(0, 10);
           let d;
           let llmUsage = false;
@@ -849,10 +876,15 @@ export class Engine {
             let evidence = null;
             if (usesJev && this.jev) {
               const read = await this.jev.decide({
-                state: this.engineState(id, analyzed, bot, recentCloses),
+                state: this.engineState(
+                  id,
+                  decisionCandidates,
+                  bot,
+                  recentCloses,
+                ),
                 menu: buildMenu({
                   id,
-                  candidates: analyzed,
+                  candidates: decisionCandidates,
                   positions,
                   maxPositions,
                   recentCloses,
@@ -900,12 +932,17 @@ export class Engine {
             // bot, exactly as a missing model would.
             const menu = buildMenu({
               id,
-              candidates: analyzed,
+              candidates: decisionCandidates,
               positions,
               maxPositions,
               recentCloses,
             });
-            const state = this.engineState(id, analyzed, bot, recentCloses);
+            const state = this.engineState(
+              id,
+              decisionCandidates,
+              bot,
+              recentCloses,
+            );
             const read = usesJev
               ? this.jev
                 ? await this.jev.decide({

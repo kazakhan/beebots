@@ -103,11 +103,15 @@ summary so the window can be tuned with data.
 ## Batch analysis
 
 The Laya daemon supports a batched request (`{"batch":[…]}`) and advertises
-`batch_ready`. The engine sends batches of at most 32 per bot cycle (chunking larger sets,
-since the daemon caps one request at 32) and maps the answers back. Only
-entry-eligible and held candidates are quoted live; non-eligible ones are
-analysed but never offered a BUY. If the daemon does not support batching or a
-batch fails, the engine falls back to serial calls.
+`batch_ready`. The engine sends batches of at most 32 per bot cycle (chunking
+larger sets, since the daemon caps one request at 32) and maps the answers back.
+Only entry-eligible and held candidates are quoted live; non-eligible ones are
+analysed but never offered a BUY. If a chunk fails it is retried once and then
+falls back to serial calls **for that chunk only**. The analysis set may be up to
+100, but the **decision prompt is bounded** (`decisionSubset`, 32 candidates:
+held + eligible + top-ranked) because Laya's model context is 8192 tokens - a
+100-candidate state is ~13k tokens and overruns it. The Laya socket timeout has a
+60 s floor so a slow GPU cannot cascade into a serial fallback.
 
 ## Control baseline (Dice)
 

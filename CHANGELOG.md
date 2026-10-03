@@ -14,6 +14,34 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.4.4] - 2026-10-04 - Bound the decision prompt; harden the Laya link
+
+3.4.2 raised `maxCandidates` to 100, but the whole analysed set was then sent to
+Laya's decision. The decision state with 100 candidates is ~13k tokens, over the
+model's 8192 context (`[transformers] ... 13172 > 8192`), so the decision call
+overran the context and held the single-GPU lock, and the analysis batch behind
+it timed out (`Laya response deadline exceeded`) and fell back to serial.
+
+### Fixed
+
+- **The decision prompt is bounded** (`decisionSubset`, 32 candidates: held +
+  entry-eligible + top-ranked by fit). The analysis set stays at 100; only the
+  decision (state + menu) is capped, so it fits the model context.
+- **Per-chunk resilience in `analyzeBatch`:** a failed chunk is retried once, then
+  falls back to serial calls for that chunk only - a bad chunk no longer forces
+  the whole bot (up to 100 candidates) to serial.
+- **The client surfaces the daemon's real error** (`Laya error: <text>`) instead
+  of masking every failure as "Invalid or unsuccessful Laya response".
+- **Laya socket timeout floored at 60 s** in `main.mjs`, so a slow GPU cannot
+  cascade into a serial fallback.
+
+### Verification
+
+- 286 Node tests pass, up from 283: the decision subset cap + held retention,
+  per-chunk serial fallback, and the surfaced daemon error.
+
+---
+
 ## [3.4.3] - 2026-10-04 - Laya sees a coin it just closed (no cooldown)
 
 A trend-following stop can fire on a pullback and the strategy then re-buys the

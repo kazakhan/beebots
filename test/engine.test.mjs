@@ -326,3 +326,23 @@ test("recentCloses reads the ledger within the window", () => {
     f.store.close();
   }
 });
+
+test("decisionSubset caps the prompt and keeps held positions", () => {
+  const f = fixture();
+  try {
+    const analyzed = Array.from({ length: 50 }, (_, i) => ({
+      product: "P" + i + "-USDC",
+      setupEligible: false,
+    }));
+    const sub = f.engine.decisionSubset("trend", analyzed, [
+      { product: "P49-USDC" },
+    ]);
+    assert.equal(sub.length, 32, "bounded to 32");
+    assert.ok(
+      sub.some((x) => x.product === "P49-USDC"),
+      "the held position is kept",
+    );
+  } finally {
+    f.store.close();
+  }
+});
