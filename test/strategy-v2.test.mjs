@@ -1030,3 +1030,38 @@ test("the fast rotation computes the 4h-24h momentum", () => {
   assert.ok(Number.isFinite(f.return4hPct), "4h momentum set");
   assert.ok(Number.isFinite(f.momentum24hPct), "24h momentum set");
 });
+
+test("rotation entries are exempt from the maxEntry cap", () => {
+  const base = {
+    setupEligible: true,
+    ask: 200,
+    maxEntry: 101,
+    stopPrice: 95,
+    bid: 200,
+    rotation: true,
+  };
+  assert.equal(entryRejection("breakout", base), null);
+  assert.match(
+    entryRejection("breakout", { ...base, rotation: false }),
+    /extended/,
+  );
+});
+
+test("the channel rule only applies when a channel is present", () => {
+  const base = {
+    setupEligible: true,
+    ask: 100,
+    maxEntry: 101,
+    stopPrice: 95,
+    bid: 90,
+  };
+  assert.equal(
+    entryRejection("breakout", base),
+    null,
+    "no channelHigh -> no channel check",
+  );
+  assert.match(
+    entryRejection("breakout", { ...base, channelHigh: 99 }),
+    /channel/,
+  );
+});

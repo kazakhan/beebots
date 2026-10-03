@@ -14,6 +14,34 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.5.1] - 2026-10-04 - Rotation fills to 3; no rank-based sells
+
+Two problems stopped the rotation bots holding their three leaders.
+
+### Fixed
+
+- **The channel rule no longer keys on the bot id.** `entryRejection` applied
+  `bid > channelHigh` whenever `id === "breakout"`, but Scout now runs
+  `momentum_rotation_fast`, which has no channel - so every Scout candidate
+  failed an undefined comparison and the menu was `["SKIP"]` (0 positions). The
+  check now applies only when the candidate actually carries a `channelHigh`.
+- **Rotation positions are no longer sold just for leaving the leader set.**
+  3.5.0 exited on rank loss, which churns fees. Rotation templates exit only on
+  the protective/plan stop and the ATR trailing stop; the slot is refilled from
+  the then-current top-3 only after a position actually exits.
+- **Rotation entries are exempt from the anti-chase `maxEntry` cap**, so an
+  extended leader is still enterable (size stays risk-capped by the stop). This
+  is what lets Spark/Scout fill toward three positions.
+
+Keeper is unchanged. Entry set = the current top-3 leaders, up to 3 positions.
+
+### Verification
+
+- 292 Node tests pass, up from 290: rotation exempt from the cap, the channel
+  rule only with a channel, and a dropped-out leader is not sold by rank.
+
+---
+
 ## [3.5.0] - 2026-10-04 - Momentum-rotation strategies (Hive-style)
 
 The Hive's strongest bots are momentum rotations, and our Spark was a much

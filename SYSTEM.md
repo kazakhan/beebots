@@ -86,9 +86,13 @@ The defaults keep the three bots distinct: **Keeper = `trend_pullback`**,
 **Spark = `momentum_leaders`** (blend of 24h + 7d momentum, top-3 leaders over
 the top-100 market cap), **Scout = `momentum_rotation_fast`** (4h + 24h
 momentum, top-3 leaders over the full universe). The rotation templates have no
-pullback/breakout gate: they hold the top-3 leaders and **exit as soon as a coin
-leaves the leader set** (which frees the slot to rotate into the new leader -
-Laya still chooses). `evaluate()` dispatches on the selected template.
+pullback/breakout gate: they hold the **top-3 leaders** and exit only on their
+own risk exits - the protective/plan stop and the ATR trailing stop. They are
+**not** sold merely for dropping out of the leader set (that churns fees); the
+slot is instead refilled from the then-current top-3 only after a position
+actually exits. They are also exempt from the anti-chase `maxEntry` cap (buying
+strength is the point; size is still risk-capped by the stop). `evaluate()`
+dispatches on the selected template.
 
 The Trade Review may reassign a bot to a different template, and is **required**
 to do so when the bot is flagged: after **10 closed trades** without beating Dice

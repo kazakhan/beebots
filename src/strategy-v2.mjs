@@ -271,6 +271,7 @@ export function evaluate(id, frames, rules, membership) {
     f.stopPrice = close - 2 * a;
     fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rotation = true;
     f.rankScore = 0;
     f.rankTime = h.at(-1).time + 3600000;
   } else if (strat === "momentum_rotation_fast") {
@@ -290,6 +291,7 @@ export function evaluate(id, frames, rules, membership) {
     f.stopPrice = close - 2 * a;
     fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rotation = true;
     f.rankScore = 0;
     f.rankTime = h.at(-1).time + 3600000;
   } else if (strat === "range_breakout") {
@@ -486,10 +488,18 @@ export function rankMomentum(
 // decide eligibility and to state the exact reason a chosen entry was declined.
 export function entryRejection(id, f) {
   if (f.setupEligible !== true) return "Setup no longer qualifies";
-  if (!(Number.isFinite(f.ask) && f.ask <= f.maxEntry))
+  // The momentum-rotation templates buy strength by design, so they are exempt
+  // from the anti-chase maxEntry cap (size is still risk-capped by the stop).
+  if (!f.rotation && !(Number.isFinite(f.ask) && f.ask <= f.maxEntry))
     return "Entry too extended (ask past the max entry)";
   if (!(f.ask > f.stopPrice)) return "Entry below the stop";
-  if (id === "breakout" && !(f.bid > f.channelHigh))
+  // The channel rule belongs to the breakout setup, not to the bot id: only
+  // applies when the candidate actually carries a channel.
+  if (
+    id === "breakout" &&
+    Number.isFinite(f.channelHigh) &&
+    !(f.bid > f.channelHigh)
+  )
     return "Breakout lost the channel";
   return null;
 }

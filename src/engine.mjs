@@ -35,7 +35,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.5.0";
+const BUILD = "3.5.1";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -1669,13 +1669,6 @@ export class Engine {
       });
     }
     if (q.bid <= policy.stopPrice) return "Strategy trailing stop";
-    // The rotation templates leave as soon as the coin is no longer a top-3
-    // leader (the snapshot's setupEligible is the leader set).
-    if (
-      (strat === "momentum_leaders" || strat === "momentum_rotation_fast") &&
-      f.setupEligible !== true
-    )
-      return "No longer a momentum leader";
     if (strat === "range_breakout") {
       if (f.close < policy.breakoutLevel) return "Breakout failed";
       if (

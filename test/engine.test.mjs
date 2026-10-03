@@ -347,7 +347,7 @@ test("decisionSubset caps the prompt and keeps held positions", () => {
   }
 });
 
-test("the rotation exit fires when the coin is no longer a leader", () => {
+test("a rotation position is not sold just for leaving the leader set", () => {
   const f = fixture();
   try {
     const e = {
@@ -382,7 +382,8 @@ test("the rotation exit fires when the coin is no longer a leader", () => {
     };
     assert.equal(
       Engine.prototype.strategyExit.call(e, "momentum", p, { bid: 100 }),
-      "No longer a momentum leader",
+      null,
+      "rank loss alone does not sell",
     );
   } finally {
     f.store.close();
