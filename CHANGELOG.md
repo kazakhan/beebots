@@ -14,6 +14,34 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.6] - 2026-10-03 - Timeframe changes are evidence-based (Timeframe Lab)
+
+The review could change a bot's signal timeframe (5m/15m/1h) but had no evidence
+about how another timeframe would behave, so any such change was reasoning, not
+data.
+
+### Added
+
+- **Timeframe Lab** (`src/timeframe-lab.mjs`): before each review, code re-runs
+  each bot's own strategy over the candles already held, at 5m/15m/1h, and
+  simulates the bot's own exits (protective stop, trailing stop, `maxHoldHours`)
+  to produce, per arm per timeframe, trades/wins/losses and net return over a 24h
+  window. Deterministic, no orders, no LLM. Bounded by a product cap, an
+  evaluation cap and a time budget; a capped sample is marked `partial`.
+- The comparison is included in the review prompt and on the Trade Review card.
+- **The timeframe change is hard-gated in code:** a `params.<arm>` proposal that
+  changes `timeframe` is refused unless the lab shows the proposed timeframe
+  with a sufficient sample (>= 3 trades, not partial) and a net return at least
+  the current timeframe's. The model cannot guess past this gate.
+
+### Verification
+
+- 272 Node tests pass, up from 266: the stop / trailing / time-stop simulation,
+  the per-arm per-timeframe comparison and product cap, and the timeframe gate
+  (no evidence, insufficient sample, underperformance, and the supported case).
+
+---
+
 ## [3.3.5] - 2026-10-03 - Laya analyses whenever it is in the engine, and the decision uses it
 
 Laya stopped analysing the strategy bots. The per-candidate analysis loop was

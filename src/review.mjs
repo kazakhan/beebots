@@ -475,13 +475,17 @@ const REVIEW_SYSTEM =
   "the current value back; the code already holds it. Keep it compact: a short " +
   "summary (at most 600 characters), at most three observations, and a brief " +
   "rationale. Numeric values must stay within the allowed ranges; anything " +
-  "outside is refused. Rubrics must retain their safety clauses: no shorts, " +
-  "Laya is uncalibrated evidence not a decision or probability, code controls " +
-  "size and execution, do not alter stops, do not force trades. Capital, mode, " +
-  "leverage and disabling stops are never changeable. To undo one of your own " +
-  "applied changes, propose {target, revert:true, rationale} when the applied- " +
-  "change ledger shows it is losing to Dice. If nothing is worth changing, " +
-  "return an empty proposals list. Return only JSON: " +
+  "outside is refused. To change a bot's signal timeframe (timeframe 5m/15m/1h) " +
+  "you MUST cite the TIMEFRAME COMPARISON, and the change is refused unless the " +
+  "proposed timeframe's simulated net return is at least the current " +
+  "timeframe's. Do not guess a timeframe. Rubrics must retain their safety " +
+  "clauses: no shorts, Laya is uncalibrated evidence not a decision or " +
+  "probability, code controls size and execution, do not alter stops, do not " +
+  "force trades. Capital, mode, leverage and disabling stops are never " +
+  "changeable. To undo one of your own applied changes, propose " +
+  "{target, revert:true, rationale} when the applied-change ledger shows it is " +
+  "losing to Dice. If nothing is worth changing, return an empty proposals " +
+  "list. Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
   '"proposals":[{"target":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
@@ -611,9 +615,47 @@ export class TradeReview {
       VARIANT_NAMES.join(", ")
     );
   }
+  // A change to a bot's signal timeframe is allowed only with Timeframe Lab
+  // evidence. Returns a refusal reason, or null when the proposal does not touch
+  // a timeframe or the evidence supports it. Deterministic, so the model cannot
+  // guess a timeframe change past the gate.
+  timeframeGate(proposal, lab) {
+    const target = proposal?.target;
+    if (typeof target !== "string" || !target.startsWith("params."))
+      return null;
+    let proposed;
+    try {
+      proposed = JSON.parse(proposal.proposed);
+    } catch {
+      return null;
+    }
+    const tf = proposed?.timeframe;
+    if (typeof tf !== "string") return null;
+    const arm = target.slice("params.".length);
+    // The current timeframe comes from the live target value, not the lab, so a
+    // params proposal that merely repeats the existing timeframe is not gated.
+    let current = null;
+    try {
+      current = JSON.parse(this.currentFor(target))?.timeframe ?? null;
+    } catch {
+      current = null;
+    }
+    if (tf === current) return null;
+    const entry = lab?.arms?.[arm];
+    if (!entry)
+      return `No timeframe evidence for ${arm}; cannot change timeframe`;
+    const next = entry.timeframes?.[tf];
+    const cur = entry.timeframes?.[current];
+    const MIN = 3;
+    if (!next || next.partial || next.trades < MIN)
+      return `Insufficient timeframe evidence for ${arm} ${tf} (${next?.trades ?? 0} trades${next?.partial ? ", partial" : ""})`;
+    if (cur && !cur.partial && cur.trades >= MIN && next.net < cur.net)
+      return `Timeframe ${tf} underperforms ${current} for ${arm} (${next.net}% vs ${cur.net}%)`;
+    return null;
+  }
   // One hourly pass: gather the hour, let Laya classify it, let the model propose
   // changes, gate each proposal, and apply only what the evidence supports.
-  async run({ since, until, coverage, autoApply = true }) {
+  async run({ since, until, coverage, autoApply = true, timeframeLab = null }) {
     const events = this.store
       .recent(2000)
       .filter((e) => e.ts >= since && e.ts < until);
@@ -676,6 +718,9 @@ export class TradeReview {
           JSON.stringify(this.appliedLedger(s.orders)) +
           "\n\nCURRENT TARGETS\n" +
           JSON.stringify(this.currentTargets()) +
+          "\n\nTIMEFRAME COMPARISON (code-generated simulation over the candles " +
+          "held; a timeframe change is REFUSED unless this supports it)\n" +
+          JSON.stringify(timeframeLab) +
           "\n\n" +
           this.schemaText();
         try {
@@ -767,6 +812,14 @@ export class TradeReview {
             minSample: this.config?.review?.minSample,
             requireControl: this.config?.review?.requireControl,
           });
+      // A change to a bot's signal timeframe is allowed only with evidence: the
+      // Timeframe Lab must show the proposed timeframe is at least as good as
+      // the current one. Deterministic - never the model's word.
+      if (!isRevert) {
+        const tfError = this.timeframeGate(p, timeframeLab);
+        if (tfError) gate.reasons.push(tfError);
+      }
+      gate.ok = gate.ok && gate.reasons.length === 0;
       let applied = false;
       if (gate.ok && autoApply) {
         try {
@@ -792,6 +845,7 @@ export class TradeReview {
       proposals: reviewed,
       sample,
       layaPerf: perf,
+      timeframeLab,
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },

@@ -66,6 +66,24 @@ one and must **never** be keyed to the LLM engine id: the engine gate for it is
 "does this engine use Laya", not "is the engine `laya+llm`". An engine with no
 Laya (`llm`, `jev`, `jev+llm`) does not run it.
 
+## Timeframe evidence (the Timeframe Lab)
+
+A bot's signal timeframe (`timeframe`: 5m / 15m / 1h) is review-editable, but a
+timeframe change is never allowed on a hunch. Before each review, code re-runs
+each bot's **own strategy** (`evaluate`) over the candles already held, at every
+timeframe, and simulates the bot's **own exits** (protective stop, trailing stop,
+`maxHoldHours`) to produce, per arm per timeframe, the trades/wins/losses and net
+return over the window. This is the Timeframe Lab (`src/timeframe-lab.mjs`).
+
+- It is a **simulation** over closed bars (bid/ask approximated by the bar close),
+  bounded by a product cap, an evaluation cap and a time budget. A capped sample
+  is marked `partial`.
+- The review sees the table and must cite it. A `params.<arm>` proposal that
+  changes `timeframe` is **refused by code** unless the lab shows the proposed
+  timeframe with a sufficient sample (>= 3 trades, not partial) and a net return
+  at least the current timeframe's. The model cannot guess past this gate.
+- The lab is deterministic and side-effect free: no orders, no LLM.
+
 ## The hourly review pipeline
 
 The review runs every hour at `:00`, and once on startup for the hour that just

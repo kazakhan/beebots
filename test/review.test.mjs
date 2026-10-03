@@ -736,3 +736,114 @@ test("the LLM review keeps at most one proposal by default", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a timeframe change is refused without supporting lab evidence", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-tfgate-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    const p = (tf) => ({
+      target: "params.trend",
+      proposed: JSON.stringify({ timeframe: tf }),
+    });
+    assert.match(
+      reviewer.timeframeGate(p("5m"), null),
+      /No timeframe evidence/,
+    );
+    assert.match(
+      reviewer.timeframeGate(p("5m"), {
+        arms: {
+          trend: {
+            current: "15m",
+            timeframes: { "5m": { trades: 1, net: 0 } },
+          },
+        },
+      }),
+      /Insufficient timeframe evidence/,
+    );
+    assert.match(
+      reviewer.timeframeGate(p("5m"), {
+        arms: {
+          trend: {
+            current: "15m",
+            timeframes: {
+              "5m": { trades: 5, net: -2 },
+              "15m": { trades: 5, net: 3 },
+            },
+          },
+        },
+      }),
+      /underperforms/,
+    );
+    assert.equal(
+      reviewer.timeframeGate(p("5m"), {
+        arms: {
+          trend: {
+            current: "15m",
+            timeframes: {
+              "5m": { trades: 5, net: 4 },
+              "15m": { trades: 5, net: 3 },
+            },
+          },
+        },
+      }),
+      null,
+    );
+    assert.equal(
+      reviewer.timeframeGate(p("15m"), null),
+      null,
+      "no change, no gate",
+    );
+    assert.equal(
+      reviewer.timeframeGate({ target: "rubric.trend", proposed: "x" }, null),
+      null,
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the review prompt and record carry the timeframe comparison", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-tfprompt-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    let seen = null;
+    const model = {
+      review: async (sys, user) => {
+        seen = user;
+        return { data: { proposals: [] } };
+      },
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    const lab = { generatedAt: 1, arms: { trend: { current: "15m" } } };
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+      timeframeLab: lab,
+    });
+    assert.ok(seen.includes("TIMEFRAME COMPARISON"));
+    assert.deepEqual(rec.timeframeLab, lab);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

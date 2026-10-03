@@ -19,6 +19,7 @@ import {
   entryRejection,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
+import { buildTimeframeLab } from "./timeframe-lab.mjs";
 import { readJsonOverride, validateParams } from "./overrides.mjs";
 import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
@@ -32,7 +33,10 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.5";
+const BUILD = "3.3.6";
+// How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
+// every timeframe on the same window.
+const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -414,6 +418,7 @@ export class Engine {
         until,
         coverage: this.market.coverage?.() ?? null,
         autoApply: this.config.review?.autoApply !== false,
+        timeframeLab: this.timeframeLab(),
       });
       this.setError("review", null);
     } catch (e) {
@@ -422,6 +427,28 @@ export class Engine {
     } finally {
       this.reviewing = false;
     }
+  }
+  // Deterministic evidence about each bot's signal timeframe, for the hourly
+  // review. Re-runs each bot's own strategy over the candles already held, at
+  // 5m/15m/1h, and simulates its own exits. Bounded (product/eval/time caps) and
+  // side-effect free; returns null when no candle history is loaded.
+  timeframeLab() {
+    const market = this.market;
+    if (!market?.frames?.size) return null;
+    const products = Array.isArray(market.products) ? market.products : [];
+    if (!products.length) return null;
+    const until = Date.now();
+    return buildTimeframeLab({
+      products,
+      framesFor: (p) => market.frames.get(p),
+      membershipFor: (p) =>
+        market.entries?.get(p)?.membership ?? { category: "unclassified" },
+      arms: IDS.map((id) => ({ id, rules: this.effectiveRules(id) })),
+      // 5m/15m history is ~25h, so a longer lookback buys nothing for them; 24h
+      // keeps all three timeframes comparable.
+      since: until - TIMEFRAME_LAB_LOOKBACK_MS,
+      until,
+    });
   }
   stop() {
     this.stopped = true;
