@@ -14,6 +14,52 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.4.0] - 2026-10-04 - Batch analysis, strategy pool, rotation, and a real control
+
+Combined release: make the loop fast and correct, stop the review truncating,
+give the review a strategy pool, and fix the control's universe.
+
+### Performance / correctness
+
+- **Batched Laya analysis.** The daemon advertises `batch_ready`; the engine now
+  sends one `{"batch":[…]}` per bot cycle and maps the answers back (one forward
+  pass for up to 32 candidates instead of one call each), with a serial fallback.
+- **Execution no longer false-expires.** The analysed candidate is stamped with
+  the analysis completion time, so the `Analysis expired before execution` guard
+  measures the analysis (just run), not a quote taken before a long loop.
+  `maxCandidates` is now **32** (matches the batch cap) and still not
+  review-tunable.
+- **Menu recorded on decisions** (diagnostic): the offered moves are stored on
+  the decision so it is visible whether a BUY was on the menu.
+
+### Review
+
+- **Objective is equity, not just "beat Dice".** Trading less is explicitly not
+  a strategy; "fewer candidates" is not "better quality"; proposals must keep the
+  arm participating and raise expectancy.
+- **Compact outputs** to stop the truncation: numeric and question-set proposals
+  are now **patches** (changed keys/heads only) merged onto the current value, so
+  the model no longer has to emit 4 KB documents and cannot overrun the 8192-cap.
+- **Strategy pool + rotation.** Seven pre-authored templates
+  (`trend_pullback`, `range_breakout`, `momentum_continuation`, `mean_reversion`,
+  `breakout_retest`, `volatility_compression`, `range_mean_return`) selectable via
+  `params.<bot>.strategy`; each bot is flagged **STRATEGY DUE** after **10 closed
+  trades** without beating Dice, and the review replaces the strategy instead of
+  nudging it. Open positions resolve; new entries use the new template.
+
+### Control
+
+- **Dice draws from the top-100 by market cap** (CoinGecko daily, cached) so the
+  baseline is credible, with a fallback to the last good list.
+
+### Verification
+
+- 279 Node tests pass, up from 272: batch mapping and per-row isolation, the
+  strategy dispatch and pool, the `strategy` param enum, review patch merging,
+  and the pool/due prompt.
+
+---
+
 ## [3.3.9] - 2026-10-03 - Trading restored: 1h context, fixed maxCandidates
 
 3.3.8 stopped the bots trading. Two defects: Spark's `maxEntry` was `NaN`

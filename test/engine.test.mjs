@@ -212,7 +212,7 @@ test("scheduleReview runs the just-closed hour on startup", async () => {
   f.store.close();
 });
 
-test("effectiveRules pins maxCandidates to 25 even with a hostile override", () => {
+test("effectiveRules pins maxCandidates to 32 even with a hostile override", () => {
   const c = config();
   const dir = mkdtempSync(join(tmpdir(), "beebots-maxcand-"));
   c.dataDir = dir;
@@ -232,7 +232,7 @@ test("effectiveRules pins maxCandidates to 25 even with a hostile override", () 
       model: {},
     });
     const rules = engine.effectiveRules("momentum");
-    assert.equal(rules.maxCandidates, 25, "pinned");
+    assert.equal(rules.maxCandidates, 32, "pinned");
     assert.equal(rules.riskPct, 1.2, "other stored values still apply");
   } finally {
     store.close();

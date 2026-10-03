@@ -1,8 +1,59 @@
 // Closed-bar strategy rules; all lookbacks exclude the bar being evaluated.
 import { refuse } from "./refusal.mjs";
 export const VERSION = "2.0.0";
+// The pool of pre-authored, standard-quality strategy templates the Trade Review
+// may assign to a bot (`params.<bot>.strategy`). Each maps to a trigger below.
+export const STRATEGY_POOL = {
+  trend_pullback: { label: "Trend pullback (Keeper)" },
+  range_breakout: { label: "Range breakout (Scout)" },
+  momentum_continuation: { label: "Momentum continuation (Spark)" },
+  mean_reversion: { label: "Mean reversion" },
+  breakout_retest: { label: "Breakout retest" },
+  volatility_compression: { label: "Volatility compression" },
+  range_mean_return: { label: "Range mean return" },
+};
+export const DEFAULT_STRATEGY = {
+  breakout: "range_breakout",
+  trend: "trend_pullback",
+  momentum: "momentum_continuation",
+};
+// Per-template defaults, merged under the bot defaults, so any bot can run any
+// template even if its own defaults omit the fields that template reads.
+export const TEMPLATE_DEFAULTS = {
+  range_breakout: {
+    rangeBars: 24,
+    rangeAtr: 6,
+    relativeVolume: 2,
+    maxExtensionAtr: 2,
+    minSignalBars: 60,
+    pullbackBars: 5,
+  },
+  trend_pullback: { pullbackBars: 5, maxExtensionAtr: 0.5, minSignalBars: 60 },
+  momentum_continuation: {
+    pullbackBars: 5,
+    maxExtensionAtr: 0.5,
+    minSignalBars: 4,
+    topFraction: 0.2,
+    minBreadth: 10,
+  },
+  mean_reversion: { pullbackBars: 5, maxExtensionAtr: 0.75, minSignalBars: 20 },
+  breakout_retest: {
+    rangeBars: 24,
+    maxExtensionAtr: 0.75,
+    minSignalBars: 20,
+  },
+  volatility_compression: {
+    rangeBars: 24,
+    rangeAtr: 6,
+    relativeVolume: 2,
+    maxExtensionAtr: 2,
+    minSignalBars: 60,
+  },
+  range_mean_return: { rangeBars: 24, maxExtensionAtr: 0.5, minSignalBars: 40 },
+};
 export const defaults = {
   breakout: {
+    strategy: "range_breakout",
     rangeBars: 24,
     // Loosened in 2.3.0. The live coverage panel showed genuine breakouts held
     // back by four independent edges at once: compressionAtr 4.13-5.30 against a
@@ -31,6 +82,7 @@ export const defaults = {
     categories: ["meme", "speculative", "unclassified"],
   },
   trend: {
+    strategy: "trend_pullback",
     pullbackBars: 5,
     maxExtensionAtr: 0.5,
     riskPct: 1,
@@ -44,6 +96,7 @@ export const defaults = {
     maxCandidates: 25,
   },
   momentum: {
+    strategy: "momentum_continuation",
     topFraction: 0.2,
     minBreadth: 10,
     riskPct: 1,
@@ -158,7 +211,11 @@ export function trendCore(f, ctx, prior, rules, fail) {
   return { a, stop: Math.min(...pullback.map((x) => x.low)) - 0.25 * a };
 }
 export function evaluate(id, frames, rules, membership) {
-  const r = { ...defaults[id], ...rules },
+  // Which pre-authored template this bot runs. Defaults to its historical
+  // strategy; the Trade Review selects from STRATEGY_POOL.
+  const strat =
+    rules?.strategy ?? defaults[id]?.strategy ?? DEFAULT_STRATEGY[id] ?? id;
+  const r = { ...TEMPLATE_DEFAULTS[strat], ...defaults[id], ...rules },
     c = frames.five,
     h = frames.hour;
   // The signal timeframe is tunable (5m / 15m / 1h). The bar period the style
@@ -184,16 +241,16 @@ export function evaluate(id, frames, rules, membership) {
   const fail = (condition, reason) => {
     if (!condition) f.reasons.push(reason);
   };
-  if (id === "breakout") {
+  if (strat === "range_breakout") {
     const minBars = Number(r.minSignalBars) || 120;
     if (bars.length < Math.max(minBars, 15) || (h?.length ?? 0) < 60)
       throw Error(
-        `Scout signal history warming (${bars.length}/${minBars} bars)`,
+        `Range-breakout signal history warming (${bars.length}/${minBars} bars)`,
       );
     // Shared Keeper core: 1h uptrend context + orderly EMA20 pullback.
     const { a, stop } = trendCore(f, h, prior, r, fail);
-    // Scout's distinct trigger: a fresh breakout above the pre-breakout
-    // consolidation range, on a relative-volume surge.
+    // Distinct trigger: a fresh breakout above the pre-breakout consolidation
+    // range, on a relative-volume surge.
     const range = prior.slice(-r.rangeBars),
       vols = range.map((x) => x.volume);
     f.channelHigh = Math.max(...range.map((x) => x.high));
@@ -206,13 +263,12 @@ export function evaluate(id, frames, rules, membership) {
     fail(close - f.stopPrice <= 3 * a, "Breakout stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = close / f.channelHigh;
-  } else if (id === "trend") {
+  } else if (strat === "trend_pullback") {
     if ((h?.length ?? 0) < 60 || bars.length < (Number(r.minSignalBars) || 60))
-      throw Error("Keeper context history warming");
+      throw Error("Trend-pullback context history warming");
     const { a, stop } = trendCore(f, h, prior, r, fail);
     const hp = prior.map((x) => x.close);
-    // Keeper's distinct trigger: a resumption close above the prior high and
-    // above the signal-timeframe EMA20.
+    // Resumption close above the prior high and the signal-timeframe EMA20.
     fail(
       close > prior.at(-1).high && close > ema([...hp, close], 20),
       "No hourly resumption close",
@@ -221,11 +277,11 @@ export function evaluate(id, frames, rules, membership) {
     fail(close - f.stopPrice <= 3 * a, "Pullback stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = f.ema20 / f.ema50;
-  } else {
+  } else if (strat === "momentum_continuation") {
     const minBars = Number(r.minSignalBars) || 4;
     if (h.length < 200 || bars.length < Math.max(minBars, 15))
-      throw Error("Spark seven-day history warming");
-    // Shared Keeper core, then Spark's momentum trigger.
+      throw Error("Momentum seven-day history warming");
+    // Shared Keeper core, then the momentum trigger.
     const { a, stop } = trendCore(f, h, prior, r, fail);
     const hp = h.map((x) => x.close),
       ema20h = ema(hp, 20);
@@ -239,13 +295,87 @@ export function evaluate(id, frames, rules, membership) {
     fail(hp.at(-1) > ema20h, "Hourly price below EMA20");
     fail(
       close > Math.max(...prior.slice(-3).map((x) => x.high)),
-      "No 15-minute continuation breakout",
+      "No continuation breakout",
     );
     f.stopPrice = stop;
     fail(close - f.stopPrice <= 3 * a, "Continuation stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = 0;
     f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "mean_reversion") {
+    if ((h?.length ?? 0) < 60 || bars.length < (Number(r.minSignalBars) || 20))
+      throw Error("Mean-reversion history warming");
+    // Buy a dip within a 1h uptrend: the prior bar closed below the signal EMA20
+    // and this bar reclaims the prior close (no demanded breakout).
+    const { a, stop } = trendCore(f, h, prior, r, fail);
+    const ema20s = ema([...prior.map((x) => x.close), close], 20);
+    fail(prior.at(-1)?.close < ema20s, "No dip below EMA20");
+    fail(close > prior.at(-1).close, "No reversion close");
+    f.stopPrice = stop;
+    fail(close - f.stopPrice <= 3 * a, "Reversion stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = f.ema20 / f.ema50;
+  } else if (strat === "breakout_retest") {
+    if ((h?.length ?? 0) < 60 || bars.length < (Number(r.minSignalBars) || 20))
+      throw Error("Breakout-retest history warming");
+    const { a, stop } = trendCore(f, h, prior, r, fail);
+    const range = prior.slice(-r.rangeBars);
+    f.channelHigh = Math.max(...range.map((x) => x.high));
+    f.channelLow = Math.min(...range.map((x) => x.low));
+    // The prior bar retested the broken level; this bar holds above it.
+    fail(
+      prior.at(-1)?.low <= f.channelHigh && close > f.channelHigh,
+      "No breakout retest",
+    );
+    f.stopPrice = stop;
+    fail(close - f.stopPrice <= 3 * a, "Retest stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = close / f.channelHigh;
+  } else if (strat === "volatility_compression") {
+    const minBars = Number(r.minSignalBars) || 60;
+    if (bars.length < Math.max(minBars, 15))
+      throw Error(`Compression history warming (${bars.length}/${minBars})`);
+    const a = atr(prior);
+    const range = prior.slice(-r.rangeBars),
+      vols = range.map((x) => x.volume);
+    f.atr = a;
+    f.channelHigh = Math.max(...range.map((x) => x.high));
+    f.channelLow = Math.min(...range.map((x) => x.low));
+    f.relativeVolume = median(vols) > 0 ? last.volume / median(vols) : 0;
+    f.compressionAtr = a > 0 ? (f.channelHigh - f.channelLow) / a : 0;
+    fail(f.compressionAtr <= r.rangeAtr, "Range not compressed");
+    fail(close > f.channelHigh, "No breakout close");
+    fail(f.relativeVolume >= r.relativeVolume, "Relative volume insufficient");
+    f.stopPrice = f.channelLow;
+    fail(close - f.stopPrice <= 3 * a, "Compression stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = close / f.channelHigh;
+  } else if (strat === "range_mean_return") {
+    if ((h?.length ?? 0) < 60 || bars.length < (Number(r.minSignalBars) || 40))
+      throw Error("Range history warming");
+    const a = atr(prior),
+      prices = h.map((x) => x.close);
+    f.atr = a;
+    f.ema20 = ema(prices, 20);
+    f.ema50 = ema(prices, 50);
+    // A range, not a trend: the context EMAs are close together.
+    fail(
+      Math.abs(f.ema20 - f.ema50) <= 0.02 * f.ema50,
+      "Context is trending, not ranging",
+    );
+    const range = prior.slice(-r.rangeBars);
+    f.channelHigh = Math.max(...range.map((x) => x.high));
+    f.channelLow = Math.min(...range.map((x) => x.low));
+    const width = f.channelHigh - f.channelLow;
+    // Buy the lower band, expecting a return to the middle.
+    fail(close <= f.channelLow + 0.25 * width, "Not at the range low");
+    fail(close > prior.at(-1).close, "No upward turn");
+    f.stopPrice = f.channelLow - 0.25 * a;
+    fail(close - f.stopPrice <= 3 * a, "Range stop too distant");
+    f.maxEntry = f.channelLow + 0.5 * width;
+    f.rankScore = 0;
+  } else {
+    throw Error(`Unknown strategy ${strat}`);
   }
   fail(
     Number.isFinite(f.atr) &&

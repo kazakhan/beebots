@@ -131,3 +131,12 @@ test("maxCandidates is fixed: out of the tunables and refused as a proposal", ()
     null,
   );
 });
+
+test("strategy is a tunable enum of the pool", () => {
+  assert.ok(PARAM_KEYS.includes("strategy"));
+  assert.equal(
+    validateParams("params.trend", { strategy: "mean_reversion" }),
+    null,
+  );
+  assert.match(validateParams("params.trend", { strategy: "nope" }), /one of/);
+});

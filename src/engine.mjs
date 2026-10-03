@@ -33,7 +33,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.9";
+const BUILD = "3.4.0";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -196,7 +196,7 @@ export class Engine {
       Object.assign(base, over);
     // Fixed structural cap: the review must never change it. Pin it even if a
     // stored override carries a value (the key is locked out of the tunables).
-    base.maxCandidates = 25;
+    base.maxCandidates = 32;
     return base;
   }
   // Runtime-wide knobs the review may tune. Defaults are the pre-review values.
@@ -210,7 +210,7 @@ export class Engine {
     const over = readJsonOverride(this.config.dataDir, "runtime", null);
     if (over && !validateParams("runtime", over)) Object.assign(base, over);
     // Fixed structural cap, as above.
-    base.maxCandidates = 25;
+    base.maxCandidates = 32;
     return base;
   }
   // Record what actually happened to a decision after execution, so the card
@@ -679,29 +679,80 @@ export class Engine {
           let analyzed = candidates;
           if (engineUses(engine, "laya")) {
             analyzed = [];
-            for (const f of candidates) {
-              if (this.stopped) return;
-              try {
-                const analysis = await this.laya.analyze(f, id);
-                this.health.laya = {
-                  ready: true,
-                  queueDepth: analysis.queue_depth,
-                  at: Date.now(),
-                };
-                this.store.event("analysis", {
-                  bot: id,
-                  product: f.product,
-                  sourceTime: f.at,
-                  ...analysis,
-                });
-                analyzed.push({ ...f, analysis });
-              } catch (e) {
-                this.store.event("status", {
-                  bot: id,
-                  product: f.product,
-                  message: e.message,
-                });
-                analyzed.push(f);
+            // One batched inference for the whole bot cycle (the daemon groups
+            // by question set). Falls back to serial calls if the daemon does
+            // not advertise batch support.
+            let batch = null;
+            try {
+              batch = await this.laya.analyzeBatch(candidates, id);
+            } catch (e) {
+              this.store.event("status", {
+                bot: id,
+                message: `Laya batch unavailable: ${e.message}`,
+              });
+            }
+            if (batch && batch.results.length === candidates.length) {
+              this.health.laya = {
+                ready: true,
+                queueDepth: batch.queue_depth,
+                at: Date.now(),
+              };
+              candidates.forEach((f, i) => {
+                const r = batch.results[i];
+                if (r && !r.error) {
+                  this.store.event("analysis", {
+                    bot: id,
+                    product: f.product,
+                    sourceTime: f.at,
+                    answers: r.answers,
+                    elapsed_s: r.elapsed_s,
+                    queue_depth: batch.queue_depth,
+                  });
+                  analyzed.push({
+                    ...f,
+                    analysis: {
+                      answers: r.answers,
+                      elapsed_s: r.elapsed_s,
+                      queue_depth: batch.queue_depth,
+                    },
+                    // Stamp the analysis time so the execution freshness guard
+                    // measures the analysis, not a quote taken before a long loop.
+                    at: Date.now(),
+                  });
+                } else {
+                  this.store.event("status", {
+                    bot: id,
+                    product: f.product,
+                    message: r?.error ?? "batch item failed",
+                  });
+                  analyzed.push({ ...f, at: Date.now() });
+                }
+              });
+            } else {
+              for (const f of candidates) {
+                if (this.stopped) return;
+                try {
+                  const analysis = await this.laya.analyze(f, id);
+                  this.health.laya = {
+                    ready: true,
+                    queueDepth: analysis.queue_depth,
+                    at: Date.now(),
+                  };
+                  this.store.event("analysis", {
+                    bot: id,
+                    product: f.product,
+                    sourceTime: f.at,
+                    ...analysis,
+                  });
+                  analyzed.push({ ...f, analysis, at: Date.now() });
+                } catch (e) {
+                  this.store.event("status", {
+                    bot: id,
+                    product: f.product,
+                    message: e.message,
+                  });
+                  analyzed.push({ ...f, at: Date.now() });
+                }
               }
             }
             analyzed.sort(
@@ -840,6 +891,9 @@ export class Engine {
               provider: usesJev ? "jev" : null,
               engine,
               usage: null,
+              // The offered moves, so the card/event shows whether a BUY was
+              // actually on the menu (diagnostic; no behaviour).
+              menu: Object.keys(menu).slice(0, 60),
             };
           }
           // Usage accounting is telemetry. It must never be able to abort a
@@ -995,7 +1049,16 @@ export class Engine {
         : this.effectiveRuntime().cadenceMs;
     const bucket = Math.floor(Date.now() / interval);
     if (this.store.read().assessments?.[id] === bucket) return;
-    const available = this.market.snapshot();
+    let available = this.market.snapshot();
+    // Dice draws only from the top coins by market cap when that list is known,
+    // so it is a credible baseline rather than a pick over the whole long tail.
+    const cap = this.market.controlPool?.();
+    if (cap) {
+      const filtered = available.filter((f) =>
+        cap.has(String(f.product).split("-")[0].toUpperCase()),
+      );
+      if (filtered.length) available = filtered;
+    }
     if (!available.length) return;
     this.store.change((s) => {
       s.assessments ??= {};

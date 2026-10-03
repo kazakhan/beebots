@@ -123,3 +123,79 @@ test("analysis serializes callers and returns uncalibrated scores", async () => 
     await f.close();
   }
 });
+
+test("analyzeBatch maps per-candidate answers from one request", async () => {
+  const f = await fixture((s) =>
+    s.on("data", (data) => {
+      const req = JSON.parse(data);
+      if (req.batch)
+        s.write(
+          JSON.stringify({
+            ok: true,
+            batch: req.batch.map(() => ({
+              ok: true,
+              answers: {
+                fit: { score: 1 },
+                regime: { choice: "range" },
+                quality: { choice: "mixed" },
+              },
+              elapsed_s: 0.1,
+            })),
+            elapsed_s: 0.2,
+            queue_depth: 2,
+            batch_size: req.batch.length,
+          }) + "\n",
+        );
+    }),
+  );
+  try {
+    const r = await new Laya(f.path, 500).analyzeBatch(
+      [{ product: "A" }, { product: "B" }],
+      "trend",
+    );
+    assert.equal(r.results.length, 2);
+    assert.equal(r.results[0].answers.fit.score, 1);
+    assert.equal(r.batch_size, 2);
+    assert.equal(r.queue_depth, 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("analyzeBatch isolates a bad row without failing the batch", async () => {
+  const f = await fixture((s) =>
+    s.on("data", (data) => {
+      const req = JSON.parse(data);
+      if (req.batch)
+        s.write(
+          JSON.stringify({
+            ok: true,
+            batch: [
+              {
+                ok: true,
+                answers: {
+                  fit: { score: 1 },
+                  regime: { choice: "range" },
+                  quality: { choice: "mixed" },
+                },
+              },
+              { ok: false, error: "bad row" },
+            ],
+            elapsed_s: 0.2,
+            queue_depth: 1,
+            batch_size: 2,
+          }) + "\n",
+        );
+    }),
+  );
+  try {
+    const r = await new Laya(f.path, 500).analyzeBatch(
+      [{ product: "A" }, { product: "B" }],
+      "trend",
+    );
+    assert.equal(r.results[0].answers.fit.score, 1);
+    assert.equal(r.results[1].error, "bad row");
+  } finally {
+    await f.close();
+  }
+});

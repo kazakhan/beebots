@@ -969,3 +969,26 @@ test("entryRejection names the exact failing condition", () => {
   assert.match(entryRejection("breakout", { ...base, stopPrice: 101 }), /stop/);
   assert.match(entryRejection("breakout", { ...base, bid: 98 }), /channel/);
 });
+
+test("a bot runs the strategy template it is assigned", () => {
+  // The default for trend is trend_pullback, but assigning range_breakout makes
+  // it behave exactly like Scout on the same frames.
+  const asBreakout = evaluate(
+    "trend",
+    scoutFrame(),
+    { strategy: "range_breakout" },
+    meme,
+  );
+  assert.equal(asBreakout.setupEligible, true);
+  // An unknown template is refused, not silently defaulted.
+  assert.throws(
+    () => evaluate("trend", scoutFrame(), { strategy: "nope" }, meme),
+    /Unknown strategy/,
+  );
+});
+
+test("defaults carry a strategy template for every bot", () => {
+  assert.equal(defaults.breakout.strategy, "range_breakout");
+  assert.equal(defaults.trend.strategy, "trend_pullback");
+  assert.equal(defaults.momentum.strategy, "momentum_continuation");
+});

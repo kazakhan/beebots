@@ -101,6 +101,9 @@ try {
     settings,
     review: reviewer,
   });
+  // Candidate evaluation must use the same effective rules the engine trades, so
+  // review-applied params and the selected strategy take effect on the collector.
+  market.rulesFor = (id) => engine.effectiveRules(id);
   server = createServer({ config, engine, store, settings });
   await new Promise((resolve, reject) => {
     server.once("error", reject);

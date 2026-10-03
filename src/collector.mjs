@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { MarketReader } from "./market-reader.mjs";
 import { Market, closedCandles, features } from "./market.mjs";
 import { discover } from "./universe.mjs";
-import { evaluate, rankMomentum, aggregate } from "./strategy-v2.mjs";
+import {
+  evaluate,
+  rankMomentum,
+  aggregate,
+  DEFAULT_STRATEGY,
+} from "./strategy-v2.mjs";
 import { fromTrades } from "./repair-candles.mjs";
 
 // A product first discovered within this many days is considered new.
@@ -21,6 +26,10 @@ export class UniverseMarket extends Market {
     this.failures = new Map();
     this.closed = false;
     this.discoveryAt = 0;
+    // Optional: resolves the effective rules per bot (config + review
+    // overrides). Wired by main so candidate evaluation matches what the engine
+    // trades. Falls back to the raw config when unset.
+    this.rulesFor = null;
     this.categoryAt = 0;
     this.categories = [];
     this.categoryStatus = "pending";
@@ -53,6 +62,39 @@ export class UniverseMarket extends Market {
     // "new" is measured from first discovery. Used to prioritise new coins.
     const listed = this.load("firstSeen");
     this.firstSeen = new Map(listed ? Object.entries(listed) : []);
+    // Top-N by market cap, the control arm's credible baseline universe.
+    const cap = this.load("marketCapTop");
+    this.marketCapAt = cap?.at ?? 0;
+    this.marketCap = new Set(cap?.symbols ?? []);
+  }
+  // The control arm draws only from the largest coins, so Dice is a sane
+  // baseline rather than a uniform pick over the whole long tail.
+  controlPool() {
+    return this.marketCap.size ? this.marketCap : null;
+  }
+  async marketCapRefresh() {
+    if (Date.now() - this.marketCapAt < 86400000) return;
+    try {
+      const res = await fetch(
+        "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1",
+        { signal: AbortSignal.timeout(15000) },
+      );
+      if (!res.ok) throw Error("Market-cap provider HTTP " + res.status);
+      const rows = await res.json();
+      if (!Array.isArray(rows) || !rows.length)
+        throw Error("Invalid market-cap response");
+      this.marketCap = new Set(rows.map((x) => String(x.symbol).toUpperCase()));
+      this.marketCapAt = Date.now();
+      this.save("marketCapTop", {
+        at: this.marketCapAt,
+        symbols: [...this.marketCap],
+      });
+    } catch {
+      // Keep the last good list; retry in an hour rather than a full day.
+      this.marketCapAt = Date.now() - 86400000 + 3600000;
+      if (!this.marketCap.size)
+        this.save("marketCapTop", { at: this.marketCapAt, symbols: [] });
+    }
   }
   isNew(product) {
     const t = this.firstSeen?.get(product);
@@ -129,6 +171,7 @@ export class UniverseMarket extends Market {
     if (!this.discoveryTask && Date.now() - this.discoveryAt > 3600000) {
       this.discoveryTask = (async () => {
         await this.categoriesRefresh();
+        await this.marketCapRefresh();
         const result = await this.readers[0].products();
         this.catalogue = discover(
           result.products,
@@ -304,6 +347,7 @@ export class UniverseMarket extends Market {
   }
   snapshot(id) {
     if (!id) return super.snapshot();
+    const rules = this.rulesFor?.(id) ?? this.config.bots[id] ?? {};
     const rows = [];
     let warming = 0,
       rejected = 0,
@@ -316,7 +360,7 @@ export class UniverseMarket extends Market {
         continue;
       }
       try {
-        const f = evaluate(id, frames, this.config.bots[id], entry.membership);
+        const f = evaluate(id, frames, rules, entry.membership);
         const interval =
           id === "breakout" ? 300000 : id === "trend" ? 3600000 : 900000;
         if (f.signalTime < Math.floor(Date.now() / interval) * interval)
@@ -351,7 +395,12 @@ export class UniverseMarket extends Market {
       lastError,
       markets: this.products.length,
     };
-    return id === "momentum" ? rankMomentum(rows, this.config.bots[id]) : rows;
+    const strat = rules.strategy ?? DEFAULT_STRATEGY[id];
+    // Rank only the momentum-continuation strategy: if the review has assigned
+    // this bot a different template, ranking does not apply.
+    return id === "momentum" && strat === "momentum_continuation"
+      ? rankMomentum(rows, rules)
+      : rows;
   }
   coverage() {
     const evidence = Object.fromEntries(

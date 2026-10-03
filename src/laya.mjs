@@ -51,6 +51,56 @@ export function resolveAnalysisQuestions(style, override, variant = null) {
   };
 }
 
+// Candidate evidence compacted for the checkpoint. Shared by the single and the
+// batched path so both send exactly the same fields.
+const COMPACT_KEYS = [
+  "close",
+  "previousClose",
+  "channelHigh",
+  "channelLow",
+  "ema20",
+  "ema50",
+  "hourClose",
+  "hourPrevious",
+  "momentum7dPct",
+  "momentum24hPct",
+  "return15mPct",
+  "spreadBps",
+  "periodTurnover",
+  "turnover24h",
+  "atr",
+  "relativeVolume",
+  "compressionAtr",
+  "rankPercentile",
+  "breadth",
+  "stopPrice",
+  "maxEntry",
+  "contextClose",
+];
+function compactState(state) {
+  const compact = { product: state.product, period: state.period };
+  for (const key of COMPACT_KEYS)
+    if (Number.isFinite(state[key]))
+      compact[key] = Number(state[key].toPrecision(6));
+  return compact;
+}
+// Validate one answer against its question set. Returns null or an error string.
+function answerError(questions, answers) {
+  const regimeChoices = Object.keys(questions.regime.criteria ?? {});
+  const qualityChoices = Object.keys(questions.quality.criteria ?? {});
+  const fitMax = Math.max(0, (questions.fit.criteria?.length ?? 3) - 1);
+  if (
+    !answers ||
+    !Number.isFinite(answers.fit?.score) ||
+    answers.fit.score < 0 ||
+    answers.fit.score > fitMax ||
+    !regimeChoices.includes(answers.regime?.choice) ||
+    !qualityChoices.includes(answers.quality?.choice)
+  )
+    return "Unexpected Laya answer schema";
+  return null;
+}
+
 export class Laya {
   constructor(socketPath, timeoutMs = 30000, dataDir = null) {
     this.path = socketPath;
@@ -244,5 +294,42 @@ export class Laya {
     const p = this.tail.then(run);
     this.tail = p.catch(() => {});
     return p;
+  }
+  // One request carrying many candidates that share a question set (one bot's
+  // cycle). The daemon groups by questions and runs a single forward pass.
+  batch(items, timeoutMs = this.timeoutMs) {
+    return this.request({ batch: items }, timeoutMs);
+  }
+  // Classify many candidates for one bot in one inference. Returns results
+  // aligned to `candidates`; each item is `{ answers, elapsed_s }` or `{ error }`,
+  // so one bad row degrades that candidate, never the bot.
+  async analyzeBatch(candidates, style, timeoutMs = this.timeoutMs) {
+    if (!candidates?.length)
+      return { results: [], queue_depth: 0, elapsed_s: 0 };
+    const questions = resolveAnalysisQuestions(
+      style,
+      this.questionsOverride(),
+      this.analysisVariant(),
+    );
+    const items = candidates.map((s) => ({
+      state: compactState(s),
+      questions,
+    }));
+    const r = await this.batch(items, timeoutMs);
+    if (!Array.isArray(r?.batch)) throw Error("Unexpected Laya batch response");
+    const results = candidates.map((_, i) => {
+      const res = r.batch[i];
+      if (!res || res.ok !== true)
+        return { error: res?.error ?? "batch item failed" };
+      const err = answerError(questions, res.answers);
+      if (err) return { error: err };
+      return { answers: res.answers, elapsed_s: res.elapsed_s ?? null };
+    });
+    return {
+      results,
+      queue_depth: r.queue_depth ?? 0,
+      elapsed_s: r.elapsed_s ?? null,
+      batch_size: r.batch_size ?? items.length,
+    };
   }
 }

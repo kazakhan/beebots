@@ -39,7 +39,7 @@ being better than luck.
   4-hour/250-bar stack needed ~41 days of history and starved every other market;
   do not reintroduce it.
 
-- **`maxCandidates` is fixed at 25 and is not review-tunable.** It is a
+- **`maxCandidates` is fixed at 32 and is not review-tunable.** It is a
   structural cap (how many candidates a bot may assess), so it is locked: not in
   the tunable keys, not in CURRENT TARGETS, pinned in `effectiveRules`/
   `effectiveRuntime`, and any proposal that sets it is refused. The owner set it;
@@ -72,6 +72,35 @@ and must never be coupled:
    Turning the LLM off for the decision stream (engine = `laya`) **must never**
    turn off the LLM review. If the LLM review is on but unavailable or its reply
    is unusable, the review falls back to Laya's self-tune — it never fails.
+
+## Strategy pool and rotation
+
+Each bot runs one **strategy template** from a fixed, pre-authored pool
+(`STRATEGY_POOL` in `strategy-v2.mjs`), selected by `params.<bot>.strategy`:
+
+`trend_pullback`, `range_breakout`, `momentum_continuation`, `mean_reversion`,
+`breakout_retest`, `volatility_compression`, `range_mean_return`.
+
+`evaluate()` dispatches on the selected template. The defaults keep the three
+bots distinct. The Trade Review may reassign a bot to a different template, and
+is **required** to do so when the bot is flagged: after **10 closed trades**
+without beating Dice on realised P&L, the review replaces the losing strategy
+rather than nudging it. Open positions are left to resolve; new entries use the
+new strategy. `maxCandidates` is never review-tunable.
+
+## Batch analysis
+
+The Laya daemon supports a batched request (`{"batch":[…]}`) and advertises
+`batch_ready`. The engine sends one batch per bot cycle and maps the answers
+back, so 32 candidates cost one forward pass instead of 32. If the daemon does
+not support batching or the batch fails, the engine falls back to serial calls.
+
+## Control baseline (Dice)
+
+Dice is a random control, but only over a **credible universe**: when a top-100
+market-cap list is cached (CoinGecko, daily), the control draws only from those
+products. This keeps the baseline meaningful instead of a pick over the long
+tail.
 
 ## Laya analysis (always runs when Laya is in the engine)
 

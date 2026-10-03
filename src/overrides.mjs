@@ -8,6 +8,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { isVariant, VARIANT_NAMES } from "./analysis-variants.mjs";
+import { STRATEGY_POOL } from "./strategy-v2.mjs";
 
 export const OVERRIDES = {
   "laya.reviewQuestions": "laya-review-questions.json",
@@ -30,6 +31,7 @@ export const ALLOWED_TARGETS = Object.keys(OVERRIDES);
 // leverage, maxPositions and turning stops off are deliberately absent - they
 // are not tunable.
 export const PARAM_SCHEMA = {
+  strategy: { enum: Object.keys(STRATEGY_POOL) },
   rangeBars: { min: 5, max: 200, int: true },
   rangeAtr: { min: 0.5, max: 20 },
   relativeVolume: { min: 0.5, max: 10 },

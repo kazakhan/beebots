@@ -896,3 +896,76 @@ test("maxCandidates is never offered to the review", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("mergeProposal merges a partial patch onto the current target", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-merge-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    const m = reviewer.mergeProposal({
+      target: "params.trend",
+      proposed: JSON.stringify({ riskPct: 0.8 }),
+      rationale: "x",
+    });
+    const d = JSON.parse(m.proposed);
+    assert.equal(d.riskPct, 0.8);
+    assert.ok("timeframe" in d, "other keys preserved");
+    const full = reviewer.currentFor("params.trend");
+    const m2 = reviewer.mergeProposal({
+      target: "params.trend",
+      proposed: full,
+    });
+    assert.deepEqual(JSON.parse(m2.proposed), JSON.parse(full));
+    // A rubric is a full document and is not merged.
+    const r = reviewer.mergeProposal({
+      target: "rubric.trend",
+      proposed: "# Doc",
+    });
+    assert.equal(r.proposed, "# Doc");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the review prompt carries the strategy pool and due flags", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-pool-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    let seen = null;
+    const model = {
+      review: async (sys, user) => {
+        seen = user;
+        return { data: { proposals: [] } };
+      },
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.ok(seen.includes("STRATEGY POOL"));
+    assert.ok(seen.includes("STRATEGY DUE"));
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

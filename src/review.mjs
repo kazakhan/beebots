@@ -46,7 +46,10 @@ import {
 import { join } from "node:path";
 import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
-import { defaults as STRATEGY_DEFAULTS } from "./strategy-v2.mjs";
+import {
+  defaults as STRATEGY_DEFAULTS,
+  STRATEGY_POOL,
+} from "./strategy-v2.mjs";
 import { selfTune } from "./self-tune.mjs";
 import { VARIANT_NAMES } from "./analysis-variants.mjs";
 import {
@@ -462,33 +465,39 @@ export function buildHourState({ events, orders, coverage, since, until }) {
 
 const REVIEW_SYSTEM =
   "You improve an automated spot-trading system with three strategy bots and a " +
-  "random control arm named Dice. Your objective: make each bot BEAT Dice - " +
-  "more wins, fewer losses, higher realised P&L. You may change ANY editable " +
-  "target: a bot's written rubric, Laya's question sets, and the numeric " +
-  "strategy parameters (entry gates, risk, cadence, candidate cap, signal " +
-  "timeframe, Scout's universe categories) and the runtime knobs. Two jobs: " +
-  "(1) judge the bots against Laya's rubric-based review of the hour and the " +
-  "per-arm scoreboard versus Dice; (2) judge Laya itself - do its classifications " +
-  "track outcomes, and is it being asked the right questions? You are given " +
-  "Laya's review of the hour and the per-arm scoreboard, the allowed numeric " +
-  "ranges, and the CURRENT value of every editable target. Propose at most ONE " +
-  "change. Each proposal's `proposed` field MUST be the COMPLETE replacement - " +
-  "the full rubric text (with heading), the full question-set JSON, or the full " +
-  "numeric JSON - the exact shape of the matching CURRENT TARGET. Do NOT echo " +
-  "the current value back; the code already holds it. Keep it compact: a short " +
-  "summary (at most 600 characters), at most three observations, and a brief " +
-  "rationale. Numeric values must stay within the allowed ranges; anything " +
-  "outside is refused. To change a bot's signal timeframe (timeframe 5m/15m/1h) " +
-  "you MUST cite the TIMEFRAME COMPARISON, and the change is refused unless the " +
-  "proposed timeframe's simulated net return is at least the current " +
-  "timeframe's. Do not guess a timeframe. Rubrics must retain their safety " +
-  "clauses: no shorts, Laya is uncalibrated evidence not a decision or " +
-  "probability, code controls size and execution, do not alter stops, do not " +
-  "force trades. Capital, mode, leverage and disabling stops are never " +
-  "changeable. To undo one of your own applied changes, propose " +
-  "{target, revert:true, rationale} when the applied-change ledger shows it is " +
-  "losing to Dice. If nothing is worth changing, return an empty proposals " +
-  "list. Return only JSON: " +
+  "random control arm named Dice. Your goal is to INCREASE each bot's EQUITY. " +
+  "Beating Dice is necessary but not sufficient: a bot that trails Dice is " +
+  "losing and must be fixed. Trading LESS is NOT a strategy: tightening an " +
+  "entry gate so there are fewer trades does not improve anything, and 'fewer " +
+  "candidates' is NOT 'better quality'. Every proposal must keep the arm " +
+  "participating and raise expectancy. " +
+  "You may change: a bot's written rubric, Laya's question sets, the numeric " +
+  "strategy parameters, the runtime knobs, and a bot's STRATEGY TEMPLATE " +
+  "(`params.<bot>.strategy`, chosen from STRATEGY POOL). `maxCandidates` is " +
+  "OUT OF SCOPE - never propose it. Two jobs: (1) judge the bots against " +
+  "Laya's review of the hour and the per-arm scoreboard; (2) judge Laya " +
+  "itself. You are given Laya's review, the scoreboard, the STRATEGY DUE " +
+  "flags, the allowed ranges, and the current value of each target. " +
+  "ROTATE A LOSER: if a bot is flagged STRATEGY DUE (it has not beaten Dice " +
+  "over its last 10 closed trades), replace its strategy with a DIFFERENT one " +
+  "from the pool instead of nudging the loser. Propose at most ONE change per " +
+  "bot, up to two bots. For numeric targets (`params.*`, `runtime`, " +
+  "`laya.analysisPolicy`) return a PATCH: only the keys you change, e.g. " +
+  '{"riskPct":0.8}; the code merges it onto the current value. For ' +
+  "`laya.reviewQuestions` return only the heads you change. A rubric, if you " +
+  "change one, must still be the full document with its heading. Keep it " +
+  "compact: a short summary (at most 600 characters), at most three " +
+  "observations, a brief rationale. Numeric values must stay within the " +
+  "allowed ranges; anything outside is refused. A timeframe change must cite " +
+  "the TIMEFRAME COMPARISON and is refused unless the proposed timeframe's " +
+  "simulated net return is at least the current one. Rubrics must retain " +
+  "their safety clauses: no shorts, Laya is uncalibrated evidence not a " +
+  "decision or probability, code controls size and execution, do not alter " +
+  "stops, do not force trades. Capital, mode, leverage and disabling stops " +
+  "are never changeable. To undo one of your own applied changes, propose " +
+  "{target, revert:true, rationale} when the ledger shows it is losing to " +
+  "Dice. If nothing is worth changing, return an empty proposals list. " +
+  "Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
   '"proposals":[{"target":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
 
@@ -579,6 +588,31 @@ export class TradeReview {
     if (target.startsWith("rubric."))
       return readOverride(this.dataDir, target) ?? "";
     return "";
+  }
+  // Merge a model patch onto the current target value. Numeric and question
+  // targets may be returned as partial objects (the code holds the rest); rubric
+  // targets must be full documents and are passed through untouched.
+  mergeProposal(p) {
+    if (!p || p.revert === true) return p;
+    const target = p.target;
+    if (typeof target !== "string" || typeof p.proposed !== "string") return p;
+    if (target.startsWith("rubric.")) return p;
+    let patch;
+    try {
+      patch = JSON.parse(p.proposed);
+    } catch {
+      return p;
+    }
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) return p;
+    let current;
+    try {
+      current = JSON.parse(this.currentFor(target));
+    } catch {
+      return p;
+    }
+    if (!current || typeof current !== "object" || Array.isArray(current))
+      return p;
+    return { ...p, proposed: JSON.stringify({ ...current, ...patch }) };
   }
   // The current value of every editable target, for the model to rewrite.
   currentTargets() {
@@ -717,6 +751,10 @@ export class TradeReview {
           scoreboardLines(s.orders).join("\n") +
           "\n\nAPPLIED CHANGES (your prior edits and their effect)\n" +
           JSON.stringify(this.appliedLedger(s.orders)) +
+          "\n\nSTRATEGY POOL (values for params.<bot>.strategy)\n" +
+          Object.keys(STRATEGY_POOL).join(", ") +
+          "\n\nSTRATEGY DUE (10 closed trades without beating Dice: replace the strategy)\n" +
+          JSON.stringify(this.strategyDue(s.orders)) +
           "\n\nCURRENT TARGETS\n" +
           JSON.stringify(this.currentTargets()) +
           "\n\nTIMEFRAME COMPARISON (code-generated simulation over the candles " +
@@ -743,19 +781,22 @@ export class TradeReview {
                   0,
                   Math.max(1, Number(this.config?.review?.maxProposals) || 1),
                 )
-                .map((p) => ({
-                  ...p,
-                  rationale:
-                    typeof p?.rationale === "string"
-                      ? p.rationale.slice(0, 600)
-                      : p?.rationale,
-                  // The model is told not to echo `current` (it overruns the
-                  // output cap). Fill it from the target file for display/audit.
-                  current:
-                    typeof p?.current === "string" && p.current
-                      ? p.current
-                      : this.currentFor(p?.target),
-                }))
+                .map((p) => {
+                  const m = this.mergeProposal(p);
+                  return {
+                    ...m,
+                    rationale:
+                      typeof m?.rationale === "string"
+                        ? m.rationale.slice(0, 600)
+                        : m?.rationale,
+                    // The model is told not to echo `current` (it overruns the
+                    // output cap). Fill it from the target file for display/audit.
+                    current:
+                      typeof m?.current === "string" && m.current
+                        ? m.current
+                        : this.currentFor(m?.target),
+                  };
+                })
             : [];
           try {
             this.store.recordModelCall({
@@ -838,6 +879,7 @@ export class TradeReview {
       sample,
       layaPerf: perf,
       timeframeLab,
+      strategyDue: this.strategyDue(s.orders),
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
@@ -928,6 +970,13 @@ export class TradeReview {
         ? proposal.target.split(".")[1]
         : null;
     if (!arm) return;
+    let strategyChange = false;
+    if (proposal.target.startsWith("params."))
+      try {
+        strategyChange = "strategy" in JSON.parse(proposal.proposed ?? "{}");
+      } catch {
+        strategyChange = false;
+      }
     this.store.change(
       (st) => {
         st.appliedChanges ??= [];
@@ -938,10 +987,43 @@ export class TradeReview {
           rationale: proposal.rationale ?? null,
         });
         st.appliedChanges = st.appliedChanges.slice(-50);
+        // A strategy change resets the "due" window for that bot.
+        if (strategyChange) {
+          st.strategySince ??= {};
+          st.strategySince[arm] = Date.now();
+        }
       },
       "change",
       { message: `Tracking applied change ${proposal.target}`, arm },
     );
+  }
+  // Per-arm result since its last strategy change, and whether it is due for a
+  // new strategy: 10 closed trades without beating Dice by P&L.
+  strategyDue(orders) {
+    const s = this.store.read();
+    const since = s.strategySince ?? {};
+    const trips = closedRoundTrips(orders);
+    const out = {};
+    for (const arm of STRATEGY_ARMS) {
+      const from = since[arm] ?? null;
+      const armTrips = (trips[arm] ?? []).filter(
+        (t) => !from || t.closed >= from,
+      );
+      const diceTrips = (trips[CONTROL_ARM] ?? []).filter(
+        (t) => !from || t.closed >= from,
+      );
+      const pnl = armTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      const dicePnl = diceTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      out[arm] = {
+        trades: armTrips.length,
+        wins: armTrips.filter((t) => t.pnl > 0n).length,
+        losses: armTrips.filter((t) => t.pnl < 0n).length,
+        pnl: Number(pnl.toFixed(2)),
+        dicePnl: Number(dicePnl.toFixed(2)),
+        due: armTrips.length >= 10 && pnl < dicePnl,
+      };
+    }
+    return out;
   }
   // The loop's own track record: each applied change and its realised effect
   // against Dice since it was applied. This is what the LLM judges to decide
