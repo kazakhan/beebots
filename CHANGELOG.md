@@ -14,6 +14,35 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.7] - 2026-10-03 - The LLM review is shown again; Laya's review is always shown
+
+In 3.3.4 a failed LLM review was replaced by a Laya self-tune line and the last
+good review was overwritten, so a single intermittent failure blanked the review
+and showed _"Laya self-tune (LLM review unavailable…)…"_ instead of the LLM's
+work. The review itself was not broken — the API request is byte-for-byte the
+same as before, and live reviews continued to succeed (10:00, 10:01 and 11:00
+that day each produced a summary and an applied proposal).
+
+### Fixed
+
+- **A failed LLM review no longer overwrites the last good review and is no
+  longer replaced by a self-tune line.** The failure is reported as an error and
+  shown as a note; the previous review (summary + observations) stays on the
+  card. Laya's self-tune runs only when the review LLM toggle is off.
+- **Laya's stage-1 review is always rendered** on the Trade Review card (each
+  head and its choice/score) whenever Laya answered, independent of the LLM
+  stage.
+- **The prompt is smaller:** each current target is sent as compact JSON (no
+  pretty-printing), so the review request carries less noise.
+
+### Verification
+
+- 273 Node tests pass, up from 272: a failed LLM review keeps the last good
+  review and records the error (no self-tune substitution), and current targets
+  are compact JSON.
+
+---
+
 ## [3.3.6] - 2026-10-03 - Timeframe changes are evidence-based (Timeframe Lab)
 
 The review could change a bot's signal timeframe (5m/15m/1h) but had no evidence

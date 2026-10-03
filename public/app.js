@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.3.6";
+const EXPECTED_BUILD = "3.3.7";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -245,14 +245,28 @@ function renderReview(s) {
   let html = "";
   if (r.error)
     html += `<p class="note negative">Review error: ${esc(r.error)}</p>`;
-  // The LLM review stage could not run; Laya self-tuned in its place.
-  if (r.llmError)
-    html += `<p class="note negative">LLM review unavailable: ${esc(r.llmError)}</p>`;
   // A later attempt failed but the card still shows the last good review.
   if (s.reviewError && r.until !== s.reviewError.at)
     html += `<p class="note negative">Later review attempt failed (${new Date(s.reviewError.at).toLocaleString()}): ${esc(s.reviewError.message)}</p>`;
   if (r.laya?.error)
     html += `<p class="note negative">Laya: ${esc(r.laya.error)}</p>`;
+  // Laya's own review of the hour - the first stage of the pipeline. Always
+  // rendered when Laya answered, so the review is visible even if the LLM stage
+  // fails.
+  if (r.laya?.answers) {
+    const rows = Object.entries(r.laya.answers)
+      .map(([head, a]) => {
+        const val =
+          a?.choice ??
+          (Number.isFinite(a?.score) ? String(a.score) : (a?.type ?? ""));
+        const conf = Number.isFinite(a?.confidence)
+          ? ` <span class="muted">conf ${Number(a.confidence).toFixed(2)}</span>`
+          : "";
+        return `<p class="observation"><b>${esc(head)}</b> · ${esc(String(val))}${conf}</p>`;
+      })
+      .join("");
+    html += `<details class="laya-review" open><summary>Laya's review</summary>${rows}</details>`;
+  }
   if (r.summary) html += `<p class="review-summary">${esc(r.summary)}</p>`;
   if (r.observations?.length)
     html += r.observations

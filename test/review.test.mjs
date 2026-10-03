@@ -546,7 +546,7 @@ test("with an LLM the review sees Laya's verdict, not the raw hour", async () =>
   }
 });
 
-test("a failed LLM review falls back to Laya self-tune and records the reason", async () => {
+test("a failed LLM review keeps the last good review and records the error", async () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-review-fail-"));
   const store = new Store(":memory:", config());
   try {
@@ -587,16 +587,14 @@ test("a failed LLM review falls back to Laya self-tune and records the reason", 
       coverage: null,
       autoApply: false,
     });
-    assert.equal(rec.llmError, "Review is not JSON");
-    assert.equal(rec.error, null, "the review still succeeded");
-    assert.match(rec.summary, /Laya self-tune/);
-    assert.ok(
-      rec.proposals.length >= 1,
-      "the self-tune still proposes a bounded change",
-    );
+    assert.equal(rec.error, "Review is not JSON", "the failure is reported");
+    assert.equal(rec.summary, null, "no self-tune line is substituted");
+    assert.equal(rec.proposals.length, 0);
     const st = store.read();
-    assert.equal(st.lastReview.until, 7200000);
-    assert.equal(st.lastReviewError, null);
+    assert.equal(st.lastReview.until, 3600000, "the last good review is kept");
+    assert.equal(st.lastReview.summary, "all good");
+    assert.equal(st.lastReviewError.at, 7200000);
+    assert.equal(st.lastReviewError.message, "Review is not JSON");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -842,6 +840,31 @@ test("the review prompt and record carry the timeframe comparison", async () => 
     });
     assert.ok(seen.includes("TIMEFRAME COMPARISON"));
     assert.deepEqual(rec.timeframeLab, lab);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("current targets are compact JSON, not pretty-printed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-targets-compact-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    const targets = reviewer.currentTargets();
+    assert.ok(targets["laya.reviewQuestions"], "the question set is included");
+    assert.ok(targets["params.trend"], "params are included");
+    for (const [k, v] of Object.entries(targets)) {
+      if (k.startsWith("rubric.")) continue;
+      assert.equal(typeof v, "string");
+      assert.ok(!v.includes("\n"), `${k} is compact (no newlines)`);
+    }
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

@@ -18,14 +18,17 @@
 // Stage 2 is independent of the decision engine. Turning the LLM OFF for the
 // decision stream (engine = laya) MUST NEVER stop the LLM from reviewing the
 // review; that is what the dedicated "LLM review" toggle is for (settings
-// review.llm, default on). Out of the box, with no LLM at all, Stage 2 falls
-// back to Laya's own bounded self-tune so the loop still improves.
+// review.llm, default on). Laya's bounded self-tune runs only when that toggle
+// is OFF (no LLM at all). A *failed* LLM review is NOT replaced by self-tune: it
+// is recorded as an error and the last good review stays on the card. The
+// dashboard always renders Laya's Stage 1 review.
 //
 // The LLM's reply must fit the model's output cap (deepseek-flash: 8192 tokens).
 // That is why the proposal contract carries only `proposed` — the server fills
 // `current` from the target file for display — and why proposals/observations
-// are capped. Do not add `current` back to the requested output: echoing a full
-// 4 KB question set back and forth is what truncates the reply.
+// are capped, and why the current targets are sent as compact JSON. Do not add
+// `current` back to the requested output: echoing a full 4 KB question set back
+// and forth is what truncates the reply.
 //
 // The objective is to beat the control arm (Dice): more wins, fewer losses.
 // Proposals are applied automatically within hard numeric bounds, and a change
@@ -562,19 +565,17 @@ export class TradeReview {
   // The exact current value of one editable target, as the string the model
   // would have seen and as the dashboard shows it. Used to fill `current` on a
   // proposal the model returns without it (the model is told not to echo it).
+  // The exact current value of one editable target, as a compact JSON string
+  // (no pretty-printing: the review prompt is size-sensitive). Used both as the
+  // value the model sees and to fill `current` on a proposal without it.
   currentFor(target) {
     if (target === "laya.reviewQuestions")
-      return JSON.stringify(this.reviewQuestions(), null, 1);
-    if (target === "runtime")
-      return JSON.stringify(this.runtimeView(), null, 1);
+      return JSON.stringify(this.reviewQuestions());
+    if (target === "runtime") return JSON.stringify(this.runtimeView());
     if (target === "laya.analysisPolicy")
-      return JSON.stringify(this.currentValue("laya.analysisPolicy"), null, 1);
+      return JSON.stringify(this.currentValue("laya.analysisPolicy"));
     if (target.startsWith("params."))
-      return JSON.stringify(
-        this.paramView(target.slice("params.".length)),
-        null,
-        1,
-      );
+      return JSON.stringify(this.paramView(target.slice("params.".length)));
     if (target.startsWith("rubric."))
       return readOverride(this.dataDir, target) ?? "";
     return "";
@@ -688,11 +689,10 @@ export class TradeReview {
     let summary = null,
       observations = [],
       proposals = [],
-      error = null,
-      llmError = null;
-    // Laya's bounded self-tune: the no-LLM path, and the fallback when the LLM
-    // review stage cannot run (no endpoint/key) or its reply cannot be used.
-    // This is what lets the loop work out of the box with only Laya.
+      error = null;
+    // Laya's bounded self-tune: the no-LLM path (the review LLM toggle is off).
+    // It is NOT a substitute for a failed LLM review - a failure is reported and
+    // the last good review is kept on the card (see the record step below).
     const selfTuneNow = () => {
       const tuned = selfTune({
         answers: laya.answers,
@@ -769,19 +769,10 @@ export class TradeReview {
           }
         } catch (e) {
           // The LLM stage failed (unconfigured, timed out, truncated, or not
-          // JSON). Fall back to Laya's bounded self-tune so the review still
-          // produces a result. The failure is surfaced, never fatal.
-          llmError = e.message;
-          try {
-            proposals = selfTuneNow();
-            summary = `Laya self-tune (LLM review unavailable: ${e.message}): ${
-              proposals.length
-                ? `${proposals.length} bounded change(s)`
-                : "no change needed"
-            }`;
-          } catch (e2) {
-            error = e2.message;
-          }
+          // JSON). Record the exact reason. Do NOT substitute a self-tune line
+          // and do NOT overwrite the last good review; the record step keeps the
+          // previous review on the card and attaches this error as a note.
+          error = e.message;
         }
       } else {
         // No LLM review: Laya self-tunes - it selects a pre-authored analysis
@@ -849,7 +840,6 @@ export class TradeReview {
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
-      llmError,
       error,
     };
     // Keep the last successful review so a failed attempt cannot blank the

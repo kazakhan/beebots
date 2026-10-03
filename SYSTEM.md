@@ -112,7 +112,17 @@ tokens). A proposal therefore carries only `proposed`; the server fills
 `current` from the target file for display. Do **not** add `current` back to the
 requested output: echoing a full 4 KB question set back and forth is exactly what
 truncated the reply before. Proposals (one per hour by default), observations,
-and the summary are capped for the same reason.
+and the summary are capped for the same reason. The prompt also sends each
+current target as a **compact** JSON string (no pretty-printing) — keep it small.
+
+### Failure behaviour (do not break this)
+
+- The dashboard **always renders Laya's stage-1 review** when Laya answered.
+- If the LLM stage fails, the last successful review stays on the card and the
+  failure is recorded as `lastReviewError` and shown as a note. It is **never**
+  replaced by a self-tune line.
+- Laya's self-tune runs only when the review LLM toggle is **off**. It is not a
+  substitute for a failed LLM review.
 
 ## Safety invariants (never proposed away)
 

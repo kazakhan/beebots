@@ -1342,6 +1342,13 @@ footer {
 #review .timeframe-lab summary {
   cursor: pointer;
 }
+#review .laya-review {
+  margin: 6px 0;
+}
+#review .laya-review summary {
+  cursor: pointer;
+  font-weight: 600;
+}
 @media (max-width: 1200px) {
   .bots {
     grid-template-columns: repeat(2, minmax(0, 1fr));
