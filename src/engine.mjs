@@ -35,7 +35,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.5.1";
+const BUILD = "3.5.2";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -884,6 +884,7 @@ export class Engine {
                 ),
                 menu: buildMenu({
                   id,
+                  strategy: rules.strategy,
                   candidates: decisionCandidates,
                   positions,
                   maxPositions,
@@ -932,6 +933,7 @@ export class Engine {
             // bot, exactly as a missing model would.
             const menu = buildMenu({
               id,
+              strategy: rules.strategy,
               candidates: decisionCandidates,
               positions,
               maxPositions,

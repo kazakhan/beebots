@@ -12,7 +12,7 @@
 // score; code maps that answer to an action. The LLM path keeps its JSON
 // contract. One catalogue here means the runtime, the settings file and the
 // dashboard agree on the same list and on which components each engine uses.
-import { entryEligible } from "./strategy-v2.mjs";
+import { entryEligible, isRotationStrategy } from "./strategy-v2.mjs";
 
 export const ENGINES = {
   jev: {
@@ -96,6 +96,7 @@ const MOVE = /^(BUY|SELL|HOLD) (\S+)$/;
 // and dropped from view cannot produce a BUY.
 export function buildMenu({
   id = null,
+  strategy = null,
   candidates = [],
   positions = [],
   maxPositions = 1,
@@ -103,11 +104,15 @@ export function buildMenu({
 }) {
   const held = new Set(positions.map((p) => p.product));
   const room = positions.length < Number(maxPositions || 1);
+  // A rotation template manages every exit in code (stop / trailing), so the
+  // holder is offered HOLD only - no discretionary SELL to churn the position.
+  const discretionarySell = !isRotationStrategy(strategy);
   const menu = {};
   for (const c of candidates) {
     if (!c || typeof c.product !== "string" || !c.product) continue;
     if (held.has(c.product)) {
-      menu[`SELL ${c.product}`] = `Close the ${c.product} position now`;
+      if (discretionarySell)
+        menu[`SELL ${c.product}`] = `Close the ${c.product} position now`;
       menu[`HOLD ${c.product}`] = `Keep the ${c.product} position open`;
     } else if (
       room &&
@@ -120,7 +125,8 @@ export function buildMenu({
       const note = rc
         ? ` (closed ${rc.minsAgo}m ago at ${rc.pnlPct >= 0 ? "+" : ""}${rc.pnlPct}%, ${rc.why ?? "exit"})`
         : "";
-      menu[`BUY ${c.product}`] = `Enter a new long ${c.product} position${note}`;
+      menu[`BUY ${c.product}`] =
+        `Enter a new long ${c.product} position${note}`;
     }
   }
   menu.SKIP = "No trade this cycle";

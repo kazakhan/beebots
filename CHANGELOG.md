@@ -14,6 +14,28 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.5.2] - 2026-10-04 - Rotation positions are held; exits are code-managed
+
+The rotation bots were buying a leader and selling it ~5 minutes later. The log
+shows it was not the stop: the decision menu offered both `SELL X` and `HOLD X`,
+and Laya chose `SELL` on the next decision ("Laya chose SELL ZRO-USDC").
+
+### Fixed
+
+- **No discretionary SELL for rotation positions.** `buildMenu` now offers a
+  rotation-template holder **HOLD only** (no `SELL`), so the decider cannot dump
+  a leader minutes after buying it. Every rotation exit is code-managed:
+  `strategyExit` - the protective/plan stop and the ATR trailing stop. When one
+  fires, the slot frees and the next decision refills from the current top-3.
+- Keeper and the non-rotation templates keep their discretionary SELL.
+
+### Verification
+
+- 293 Node tests pass, up from 292: the rotation menu has `HOLD` but no `SELL`;
+  a non-rotation menu still offers both.
+
+---
+
 ## [3.5.1] - 2026-10-04 - Rotation fills to 3; no rank-based sells
 
 Two problems stopped the rotation bots holding their three leaders.

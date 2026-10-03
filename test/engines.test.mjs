@@ -182,3 +182,26 @@ test("the menu notes a recently closed product on the BUY option", () => {
   });
   assert.equal(plain["BUY AAA-USDC"], "Enter a new long AAA-USDC position");
 });
+
+test("a rotation strategy is offered HOLD only for a held coin", () => {
+  const held = { product: "AAA-USDC", held: true, setupEligible: false };
+  const positions = [{ product: "AAA-USDC" }];
+  const rot = buildMenu({
+    id: "momentum",
+    strategy: "momentum_leaders",
+    candidates: [held],
+    positions,
+    maxPositions: 3,
+  });
+  assert.ok(Object.hasOwn(rot, "HOLD AAA-USDC"));
+  assert.ok(!Object.hasOwn(rot, "SELL AAA-USDC"), "no discretionary sell");
+  const normal = buildMenu({
+    id: "trend",
+    strategy: "trend_pullback",
+    candidates: [held],
+    positions,
+    maxPositions: 3,
+  });
+  assert.ok(Object.hasOwn(normal, "SELL AAA-USDC"));
+  assert.ok(Object.hasOwn(normal, "HOLD AAA-USDC"));
+});

@@ -90,9 +90,11 @@ pullback/breakout gate: they hold the **top-3 leaders** and exit only on their
 own risk exits - the protective/plan stop and the ATR trailing stop. They are
 **not** sold merely for dropping out of the leader set (that churns fees); the
 slot is instead refilled from the then-current top-3 only after a position
-actually exits. They are also exempt from the anti-chase `maxEntry` cap (buying
-strength is the point; size is still risk-capped by the stop). `evaluate()`
-dispatches on the selected template.
+actually exits. The decider is **not offered a discretionary SELL** for a
+rotation position (HOLD only) - every exit is code-managed, so it cannot dump a
+leader minutes after buying it. They are also exempt from the anti-chase
+`maxEntry` cap (buying strength is the point; size is still risk-capped by the
+stop). `evaluate()` dispatches on the selected template.
 
 The Trade Review may reassign a bot to a different template, and is **required**
 to do so when the bot is flagged: after **10 closed trades** without beating Dice

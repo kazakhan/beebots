@@ -17,6 +17,16 @@ export const DEFAULT_STRATEGY = {
   trend: "trend_pullback",
   momentum: "momentum_leaders",
 };
+// Rotation templates manage every exit in code (stop / trailing) - the decider
+// is not offered a discretionary SELL for a position running one of these, so it
+// cannot dump a leader minutes after buying it.
+export const ROTATION_STRATEGIES = new Set([
+  "momentum_leaders",
+  "momentum_rotation_fast",
+]);
+export function isRotationStrategy(strat) {
+  return ROTATION_STRATEGIES.has(strat);
+}
 // Per-template defaults, merged under the bot defaults, so any bot can run any
 // template even if its own defaults omit the fields that template reads.
 export const TEMPLATE_DEFAULTS = {
