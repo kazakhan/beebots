@@ -14,6 +14,39 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.9] - 2026-10-03 - Trading restored: 1h context, fixed maxCandidates
+
+3.3.8 stopped the bots trading. Two defects: Spark's `maxEntry` was `NaN`
+because momentum had no `maxExtensionAtr`, so every Spark setup was rejected as
+"Move already extended"; and the shared core imposed Keeper's 4-hour, 250-bar
+context (`~41 days`) on every bot, which only 2 of 188 candidates passed.
+
+### Fixed
+
+- **The shared Keeper core now uses a 1-hour context** (`contextClose > ema50 &&
+ema20 > ema50`) instead of the 4-hour, 250-bar stack. Same pullback pattern,
+  no absurd history requirement; each bot's trigger/timeframe/universe is
+  unchanged, so the three stay distinct.
+- **Spark's `maxEntry` is finite again**: added `maxExtensionAtr` to the momentum
+  defaults. Spark can enter.
+- **`maxCandidates` is fixed at 25 and removed from review control.** It is no
+  longer in `PARAM_KEYS`/`RUNTIME_KEYS`, so it is not in CURRENT TARGETS or the
+  allowed-ranges text and cannot be proposed; `effectiveRules` and
+  `effectiveRuntime` pin it to 25 so a stored override is ignored; and
+  `validateOverride` refuses any proposal that sets it. (It remains in the
+  schemas so existing stored overrides still parse.)
+- The blocking stored overrides were reset to their defaults: breakout
+  `maxCostRisk` 0.15→0.4, `relativeVolume` 4→2, `maxExtensionAtr` 0.5→2;
+  momentum `minBreadth` 70→10, `riskPct` 0.4→1; both `maxCandidates`→25.
+
+### Verification
+
+- 272 Node tests pass: each strategy on realistic frames, a finite `maxEntry`
+  for all three, `maxCandidates` absent from the tunables and refused as a
+  proposal, and `effectiveRules` pinned to 25 despite a hostile override.
+
+---
+
 ## [3.3.8] - 2026-10-03 - The three strategies share Keeper's core
 
 Keeper (`trend`) was the only arm making money (6W/5L, +0.28) while Scout

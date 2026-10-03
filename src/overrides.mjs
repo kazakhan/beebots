@@ -60,8 +60,18 @@ export const RUNTIME_SCHEMA = {
   scoutCategories: { list: ["meme", "speculative", "unclassified"] },
 };
 
-export const PARAM_KEYS = Object.keys(PARAM_SCHEMA);
-export const RUNTIME_KEYS = Object.keys(RUNTIME_SCHEMA);
+// Structural parameters the review must never change. They stay in the schemas
+// so existing stored overrides still parse, but they are excluded from the
+// tunable key lists (so they are never offered to the model and never appear in
+// CURRENT TARGETS) and validateOverride refuses any proposal that sets them.
+export const LOCKED_PARAMS = new Set(["maxCandidates"]);
+
+export const PARAM_KEYS = Object.keys(PARAM_SCHEMA).filter(
+  (k) => !LOCKED_PARAMS.has(k),
+);
+export const RUNTIME_KEYS = Object.keys(RUNTIME_SCHEMA).filter(
+  (k) => !LOCKED_PARAMS.has(k),
+);
 
 function boundError(key, value, rule) {
   if (rule.enum)
@@ -179,6 +189,9 @@ export function validateOverride(target, text, { invariantsHold } = {}) {
     } catch {
       return "A numeric override must be valid JSON";
     }
+    if (d && typeof d === "object")
+      for (const k of Object.keys(d))
+        if (LOCKED_PARAMS.has(k)) return `${k} is a fixed parameter`;
     return validateParams(target, d);
   }
   // Laya's analysis policy: a variant choice plus optional knobs.

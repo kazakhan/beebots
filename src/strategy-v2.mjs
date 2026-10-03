@@ -50,6 +50,9 @@ export const defaults = {
     maxCostRisk: 0.2,
     trailAtr: 2.5,
     trailR: 2,
+    // The shared trigger reads maxExtensionAtr; without it maxEntry is NaN and
+    // every Spark setup is rejected as "Move already extended".
+    maxExtensionAtr: 0.5,
     // Shared Keeper core (3.3.8): the pullback window, then Spark's momentum
     // trigger and top-quintile ranking.
     pullbackBars: 5,
@@ -107,11 +110,16 @@ export function aggregate(rows, seconds) {
       volume: g.reduce((s, x) => s + x.volume, 0),
     }));
 }
-// Keeper's core, shared by every strategy (3.3.8): a completed 4h uptrend with
-// an orderly EMA20 pullback on the signal timeframe. Each strategy supplies its
-// own trigger on top of it, so the three stay distinct while all lean on the
-// pattern that outperforms Dice. `fail(false, reason)` records a rejection.
-// Sets the 4h EMAs and atr on `f` and returns the atr and the pullback stop.
+// Keeper's core, shared by every strategy: an uptrend on the context timeframe
+// (the 1-hour frames) and an orderly EMA20 pullback on the signal timeframe.
+// Each strategy supplies its own trigger on top, so the three stay distinct
+// while all lean on the pattern that outperforms Dice. `fail(false, reason)`
+// records a rejection. Sets the context EMAs and atr on `f` and returns the atr
+// and the pullback stop.
+//
+// The context check is deliberately simple — price above a long EMA and the
+// short EMA above the long one. Keeper's original 4-hour, 250-bar stack required
+// ~41 days of history and starved every other market. Do not bring that back.
 export function trendCore(f, ctx, prior, rules, fail) {
   const a = atr(prior),
     prices = ctx.map((x) => x.close),
@@ -121,10 +129,7 @@ export function trendCore(f, ctx, prior, rules, fail) {
   f.ema20 = a20;
   f.ema50 = a50;
   f.contextClose = prices.at(-1);
-  fail(
-    f.contextClose > a20 && a20 > a50 && a50 > ema(prices.slice(0, -5), 50),
-    "Four-hour uptrend not established",
-  );
+  fail(f.contextClose > a50 && a20 > a50, "Context uptrend not established");
   const pullback = prior.slice(-Math.max(1, Number(rules.pullbackBars) || 5));
   const zones = pullback.map((bar, i) => {
     const tail = prior.slice(0, prior.length - pullback.length + i + 1);
@@ -155,8 +160,7 @@ export function trendCore(f, ctx, prior, rules, fail) {
 export function evaluate(id, frames, rules, membership) {
   const r = { ...defaults[id], ...rules },
     c = frames.five,
-    h = frames.hour,
-    ctx = frames.four;
+    h = frames.hour;
   // The signal timeframe is tunable (5m / 15m / 1h). The bar period the style
   // reads from is what the Trade Review tunes so a bot can day-trade.
   const bars =
@@ -182,12 +186,12 @@ export function evaluate(id, frames, rules, membership) {
   };
   if (id === "breakout") {
     const minBars = Number(r.minSignalBars) || 120;
-    if (bars.length < Math.max(minBars, 15) || (ctx?.length ?? 0) < 250)
+    if (bars.length < Math.max(minBars, 15) || (h?.length ?? 0) < 60)
       throw Error(
         `Scout signal history warming (${bars.length}/${minBars} bars)`,
       );
-    // Shared Keeper core: completed 4h uptrend + orderly EMA20 pullback.
-    const { a, stop } = trendCore(f, ctx, prior, r, fail);
+    // Shared Keeper core: 1h uptrend context + orderly EMA20 pullback.
+    const { a, stop } = trendCore(f, h, prior, r, fail);
     // Scout's distinct trigger: a fresh breakout above the pre-breakout
     // consolidation range, on a relative-volume surge.
     const range = prior.slice(-r.rangeBars),
@@ -203,12 +207,9 @@ export function evaluate(id, frames, rules, membership) {
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = close / f.channelHigh;
   } else if (id === "trend") {
-    if (
-      (ctx?.length ?? 0) < 250 ||
-      bars.length < (Number(r.minSignalBars) || 60)
-    )
+    if ((h?.length ?? 0) < 60 || bars.length < (Number(r.minSignalBars) || 60))
       throw Error("Keeper context history warming");
-    const { a, stop } = trendCore(f, ctx, prior, r, fail);
+    const { a, stop } = trendCore(f, h, prior, r, fail);
     const hp = prior.map((x) => x.close);
     // Keeper's distinct trigger: a resumption close above the prior high and
     // above the signal-timeframe EMA20.
@@ -222,14 +223,10 @@ export function evaluate(id, frames, rules, membership) {
     f.rankScore = f.ema20 / f.ema50;
   } else {
     const minBars = Number(r.minSignalBars) || 4;
-    if (
-      h.length < 200 ||
-      bars.length < Math.max(minBars, 15) ||
-      (ctx?.length ?? 0) < 250
-    )
+    if (h.length < 200 || bars.length < Math.max(minBars, 15))
       throw Error("Spark seven-day history warming");
     // Shared Keeper core, then Spark's momentum trigger.
-    const { a, stop } = trendCore(f, ctx, prior, r, fail);
+    const { a, stop } = trendCore(f, h, prior, r, fail);
     const hp = h.map((x) => x.close),
       ema20h = ema(hp, 20);
     f.hourClose = hp.at(-1);

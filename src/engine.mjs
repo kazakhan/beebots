@@ -33,7 +33,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.8";
+const BUILD = "3.3.9";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -194,6 +194,9 @@ export class Engine {
     const over = readJsonOverride(this.config.dataDir, `params.${id}`, null);
     if (over && !validateParams(`params.${id}`, over))
       Object.assign(base, over);
+    // Fixed structural cap: the review must never change it. Pin it even if a
+    // stored override carries a value (the key is locked out of the tunables).
+    base.maxCandidates = 25;
     return base;
   }
   // Runtime-wide knobs the review may tune. Defaults are the pre-review values.
@@ -206,6 +209,8 @@ export class Engine {
     };
     const over = readJsonOverride(this.config.dataDir, "runtime", null);
     if (over && !validateParams("runtime", over)) Object.assign(base, over);
+    // Fixed structural cap, as above.
+    base.maxCandidates = 25;
     return base;
   }
   // Record what actually happened to a decision after execution, so the card

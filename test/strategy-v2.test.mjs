@@ -842,11 +842,11 @@ test("a usage write failure never prevents the decision from being recorded", as
 });
 
 // --- Scout shares Keeper's core (3.3.8) ----------------------------------
-// A completed 4h uptrend context, an orderly EMA20 pullback on the signal
-// timeframe, and Scout's own range-breakout trigger.
-function risingFour(n = 260, base = 100) {
+// A 1h uptrend context, an orderly EMA20 pullback on the signal timeframe, and
+// Scout's own range-breakout trigger.
+function risingHour(n = 260, base = 100) {
   return Array.from({ length: n }, (_, i) => ({
-    time: i * 14400000,
+    time: i * 3600000,
     open: base + i * 0.1,
     high: base + i * 0.1 + 1,
     low: base + i * 0.1 - 1,
@@ -861,7 +861,7 @@ function scoutFrame({
   lastVolume = 5,
   breakoutOffset = 0.5,
   closeBelowHigh = false,
-  four = risingFour(),
+  hour = risingHour(),
 } = {}) {
   const five = [];
   for (let i = 0; i < n; i++)
@@ -881,7 +881,7 @@ function scoutFrame({
   last.volume = lastVolume;
   last.high = close;
   last.low = close - 2 * half;
-  return { five, hour: [], four };
+  return { five, hour, four: [] };
 }
 const meme = { category: "meme" };
 const scout = (f, rules = defaults.breakout) =>
@@ -908,18 +908,18 @@ test("Scout requires the relative-volume surge", () => {
   assert.ok(thin.reasons.includes("Relative volume insufficient"));
 });
 
-test("Scout rejects a market with no 4h uptrend", () => {
+test("Scout rejects a market with no uptrend context", () => {
   const fall = Array.from({ length: 260 }, (_, i) => ({
-    time: i * 14400000,
+    time: i * 3600000,
     open: 200 - i * 0.2,
     high: 200 - i * 0.2 + 1,
     low: 200 - i * 0.2 - 1,
     close: 200 - i * 0.2,
     volume: 1,
   }));
-  const f = scout(scoutFrame({ four: fall }));
+  const f = scout(scoutFrame({ hour: fall }));
   assert.equal(f.setupEligible, false);
-  assert.ok(f.reasons.includes("Four-hour uptrend not established"));
+  assert.ok(f.reasons.includes("Context uptrend not established"));
 });
 
 test("Scout's warm-up is tunable via minSignalBars", () => {
@@ -928,7 +928,7 @@ test("Scout's warm-up is tunable via minSignalBars", () => {
   assert.doesNotThrow(() =>
     evaluate(
       "breakout",
-      { five, four: risingFour() },
+      { five, hour: risingHour() },
       {},
       { category: "unclassified" },
     ),
@@ -937,13 +937,13 @@ test("Scout's warm-up is tunable via minSignalBars", () => {
     () =>
       evaluate(
         "breakout",
-        { five, four: risingFour() },
+        { five, hour: risingHour() },
         { minSignalBars: 150 },
         { category: "unclassified" },
       ),
     /warming/,
   );
-  // The shared Keeper core needs the 4h context too.
+  // The shared Keeper core needs the 1h context too.
   assert.throws(
     () => evaluate("breakout", { five }, {}, { category: "unclassified" }),
     /warming/,

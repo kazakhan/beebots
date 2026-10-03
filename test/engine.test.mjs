@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Engine } from "../src/engine.mjs";
 import { Store } from "../src/store.mjs";
 import { config, arm, buy, exchangeOrder } from "./helpers.mjs";
@@ -207,4 +210,32 @@ test("scheduleReview runs the just-closed hour on startup", async () => {
   assert.equal(runs, 1, "startup triggers one review without waiting for :00");
   f.engine.stop();
   f.store.close();
+});
+
+test("effectiveRules pins maxCandidates to 25 even with a hostile override", () => {
+  const c = config();
+  const dir = mkdtempSync(join(tmpdir(), "beebots-maxcand-"));
+  c.dataDir = dir;
+  mkdirSync(join(dir, "overrides"), { recursive: true });
+  writeFileSync(
+    join(dir, "overrides", "params-momentum.json"),
+    JSON.stringify({ maxCandidates: 6, riskPct: 1.2 }),
+  );
+  const store = new Store(":memory:", c);
+  try {
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: {},
+      laya: {},
+      model: {},
+    });
+    const rules = engine.effectiveRules("momentum");
+    assert.equal(rules.maxCandidates, 25, "pinned");
+    assert.equal(rules.riskPct, 1.2, "other stored values still apply");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

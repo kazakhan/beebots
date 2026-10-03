@@ -597,21 +597,22 @@ export class TradeReview {
   }
   // The allowed numeric ranges, so the model proposes in-bounds values.
   schemaText() {
-    const fmt = (schema) =>
-      Object.entries(schema)
-        .map(([k, r]) =>
-          r.enum
+    const fmt = (schema, keys) =>
+      keys
+        .map((k) => {
+          const r = schema[k];
+          return r.enum
             ? `${k}: one of ${r.enum.join("|")}`
             : r.list
               ? `${k}: any of ${r.list.join("|")}`
-              : `${k}: ${r.min}..${r.max}${r.int ? " (int)" : ""}`,
-        )
+              : `${k}: ${r.min}..${r.max}${r.int ? " (int)" : ""}`;
+        })
         .join("; ");
     return (
       "ALLOWED NUMERIC RANGES\nparams.<bot>: " +
-      fmt(PARAM_SCHEMA) +
+      fmt(PARAM_SCHEMA, PARAM_KEYS) +
       "\nruntime: " +
-      fmt(RUNTIME_SCHEMA) +
+      fmt(RUNTIME_SCHEMA, RUNTIME_KEYS) +
       "\nlaya.analysisPolicy.variant: one of " +
       VARIANT_NAMES.join(", ")
     );

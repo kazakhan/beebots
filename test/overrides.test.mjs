@@ -7,6 +7,8 @@ import {
   clampParam,
   targetAllowed,
   PARAM_SCHEMA,
+  PARAM_KEYS,
+  RUNTIME_KEYS,
 } from "../src/overrides.mjs";
 
 test("the numeric registry covers each bot and the runtime", () => {
@@ -108,4 +110,24 @@ test("clampParam keeps stepped values inside the schema", () => {
   assert.equal(clampParam("params.trend", "riskPct", 99), 3);
   assert.equal(clampParam("params.trend", "minBreadth", 5.4), 5); // int rounds
   assert.equal(clampParam("runtime", "maxCandidates", 999), 50);
+});
+
+test("maxCandidates is fixed: out of the tunables and refused as a proposal", () => {
+  // Absent from the keys the model is offered or may set.
+  assert.ok(!PARAM_KEYS.includes("maxCandidates"));
+  assert.ok(!RUNTIME_KEYS.includes("maxCandidates"));
+  // A proposal that changes it is refused...
+  assert.match(
+    validateOverride("params.momentum", '{"maxCandidates":6}'),
+    /fixed parameter/,
+  );
+  assert.match(
+    validateOverride("runtime", '{"maxCandidates":6}'),
+    /fixed parameter/,
+  );
+  // ...but a stored override still parses, so other values are not lost.
+  assert.equal(
+    validateParams("params.momentum", { maxCandidates: 6, riskPct: 1 }),
+    null,
+  );
 });

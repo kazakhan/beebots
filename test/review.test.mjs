@@ -870,3 +870,29 @@ test("current targets are compact JSON, not pretty-printed", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("maxCandidates is never offered to the review", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-nomaxcand-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    const targets = reviewer.currentTargets();
+    assert.ok(
+      !targets["params.momentum"].includes("maxCandidates"),
+      "not in the current targets",
+    );
+    assert.ok(
+      !reviewer.schemaText().includes("maxCandidates"),
+      "not in the allowed ranges",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

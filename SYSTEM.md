@@ -23,9 +23,9 @@ being better than luck.
   It can make the trading decision, and/or review the review. It never places
   orders itself; code controls size and execution.
 - **Three strategy bots**, each with a permanently distinct strategy. Since
-  3.3.8 all three share **Keeper's core** — a completed 4h uptrend and an orderly
-  EMA20 pullback on the signal timeframe — and differ in their trigger,
-  timeframe and universe:
+  3.3.8 all three share **Keeper's core** — a **1-hour uptrend context**
+  (`contextClose > ema50 && ema20 > ema50`) and an orderly EMA20 pullback on the
+  signal timeframe — and differ in their trigger, timeframe and universe:
   - `trend` (Keeper) — the baseline: the core plus a **resumption close** above
     the prior high and the signal EMA20, on 15m.
   - `breakout` (Scout) — the core plus a **breakout above the pre-breakout range
@@ -34,6 +34,16 @@ being better than luck.
     hourly EMA20 and a continuation breakout**, ranked to the top quintile.
     The three trigger/timeframe/universe combinations must always stay distinct;
     never merge them.
+
+  The context is the **1-hour** frames, not the 4-hour. Keeper's original
+  4-hour/250-bar stack needed ~41 days of history and starved every other market;
+  do not reintroduce it.
+
+- **`maxCandidates` is fixed at 25 and is not review-tunable.** It is a
+  structural cap (how many candidates a bot may assess), so it is locked: not in
+  the tunable keys, not in CURRENT TARGETS, pinned in `effectiveRules`/
+  `effectiveRuntime`, and any proposal that sets it is refused. The owner set it;
+  the loop must not change it.
 - **Dice** (`control`) — the random control arm and the objective baseline.
 
 ## Out of the box
