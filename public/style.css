@@ -1300,7 +1300,8 @@ footer {
   border-color: var(--green);
 }
 #review .proposal.rejected {
-  opacity: 0.7;
+  border-color: var(--warn);
+  opacity: 0.85;
 }
 #review .proposal h4 {
   margin: 0 0 4px;

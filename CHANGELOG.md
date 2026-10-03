@@ -14,6 +14,30 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.4.1] - 2026-10-04 - Review patches apply; not-applied proposals show orange
+
+3.4.0 told the model to return compact patch **objects** (e.g.
+`{"strategy":"mean_reversion"}`), but `mergeProposal` only merged patch
+**strings**, so an object passed through unchanged and `validateOverride`
+rejected it with "Proposed text is empty". Every patch proposal since 3.4.0 -
+including the 08:00 STRATEGY DUE rotation of trend - was silently not applied.
+
+### Fixed
+
+- **`mergeProposal` accepts `proposed` as a JSON string or an inline object**,
+  merges it onto the current target value, and always emits a JSON string for the
+  gate/apply path. Rubric proposals stay full documents.
+- **Not-applied proposals are now orange** (`#review .proposal.rejected` uses
+  `--warn`); applied proposals keep the green border (that border had vanished
+  only because `applied` was false).
+
+### Verification
+
+- 279 Node tests pass: an object-form patch merges, is stringified,
+  and applies through the gate.
+
+---
+
 ## [3.4.0] - 2026-10-04 - Batch analysis, strategy pool, rotation, and a real control
 
 Combined release: make the loop fast and correct, stop the review truncating,

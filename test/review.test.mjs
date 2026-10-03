@@ -922,6 +922,15 @@ test("mergeProposal merges a partial patch onto the current target", () => {
       proposed: full,
     });
     assert.deepEqual(JSON.parse(m2.proposed), JSON.parse(full));
+    // The model may return the patch as an inline object, not a JSON string.
+    const m3 = reviewer.mergeProposal({
+      target: "params.trend",
+      proposed: { strategy: "mean_reversion" },
+    });
+    assert.equal(typeof m3.proposed, "string", "object patch is stringified");
+    const d3 = JSON.parse(m3.proposed);
+    assert.equal(d3.strategy, "mean_reversion");
+    assert.ok("timeframe" in d3, "other keys preserved");
     // A rubric is a full document and is not merged.
     const r = reviewer.mergeProposal({
       target: "rubric.trend",

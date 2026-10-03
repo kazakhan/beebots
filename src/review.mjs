@@ -595,12 +595,24 @@ export class TradeReview {
   mergeProposal(p) {
     if (!p || p.revert === true) return p;
     const target = p.target;
-    if (typeof target !== "string" || typeof p.proposed !== "string") return p;
-    if (target.startsWith("rubric.")) return p;
+    if (typeof target !== "string") return p;
+    // A rubric is a full prose document; keep it a string untouched.
+    if (target.startsWith("rubric."))
+      return typeof p.proposed === "string"
+        ? p
+        : { ...p, proposed: JSON.stringify(p.proposed) };
+    // The model may return `proposed` as a JSON string or an inline object (the
+    // prompt shows a patch object). Accept both.
     let patch;
-    try {
-      patch = JSON.parse(p.proposed);
-    } catch {
+    if (typeof p.proposed === "string") {
+      try {
+        patch = JSON.parse(p.proposed);
+      } catch {
+        return p;
+      }
+    } else if (p.proposed && typeof p.proposed === "object") {
+      patch = p.proposed;
+    } else {
       return p;
     }
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) return p;
@@ -612,6 +624,7 @@ export class TradeReview {
     }
     if (!current || typeof current !== "object" || Array.isArray(current))
       return p;
+    // Always emit a JSON string: the gate/apply path requires text.
     return { ...p, proposed: JSON.stringify({ ...current, ...patch }) };
   }
   // The current value of every editable target, for the model to rewrite.
