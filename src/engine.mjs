@@ -20,6 +20,7 @@ import {
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
 import { buildTimeframeLab } from "./timeframe-lab.mjs";
+import { closedRoundTrips } from "./review.mjs";
 import { readJsonOverride, validateParams } from "./overrides.mjs";
 import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
@@ -33,10 +34,12 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.4.2";
+const BUILD = "3.4.3";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
+// Signal-timeframe lengths, for measuring the re-entry lookback in bars.
+const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -206,6 +209,7 @@ export class Engine {
       maxCandidates: 25,
       modelMaxCallsPerDay: this.config.model?.maxCallsPerDay ?? 1000,
       scoutCategories: ["meme", "speculative", "unclassified"],
+      reentryLookbackBars: 24,
     };
     const over = readJsonOverride(this.config.dataDir, "runtime", null);
     if (over && !validateParams("runtime", over)) Object.assign(base, over);
@@ -247,7 +251,31 @@ export class Engine {
   }
   // Compact, bounded market + position state for a System One engine. It is
   // evidence, not full precision: the execution layer holds the exact numbers.
-  engineState(id, candidates, bot) {
+  // The most recent closed round trip per product, within a window measured in
+  // the bot's own signal bars. Given to Laya so it can weigh re-entering a coin
+  // it just closed (no hard cooldown - the engine lets Laya choose).
+  recentCloses(orders, botId, timeframe, bars) {
+    const barMs = TIME_MS[timeframe] ?? 900000;
+    const windowMs = Math.max(1, Number(bars) || 24) * barMs;
+    const now = Date.now();
+    const out = {};
+    for (const t of closedRoundTrips(orders)[botId] ?? []) {
+      if (now - t.closed > windowMs) continue;
+      const prev = out[t.product];
+      if (prev && prev.closed >= t.closed) continue;
+      const cost = Number(t.cost ?? 0n) / Number(SCALE);
+      const pnl = Number(t.pnl ?? 0n) / Number(SCALE);
+      out[t.product] = {
+        closed: t.closed,
+        minsAgo: Math.round((now - t.closed) / 60000),
+        pnlPct: cost > 0 ? Number(((pnl / cost) * 100).toFixed(2)) : 0,
+        win: pnl > 0,
+        why: t.reason ?? null,
+      };
+    }
+    return out;
+  }
+  engineState(id, candidates, bot, recentCloses = {}) {
     const keys = [
       "close",
       "previousClose",
@@ -272,6 +300,12 @@ export class Engine {
     ];
     return {
       bot: id,
+      // How Laya should weigh a coin it just closed. The rule is fixed; only the
+      // lookback window (reentryLookbackBars) is review-tunable.
+      guidance:
+        "If lastClose is set for a product you are considering, you recently closed it: " +
+        "prefer SKIP over BUY unless the new setup is clearly stronger - a stop-out on " +
+        "the same pullback usually whipsaws.",
       positions: (Array.isArray(bot.positions) ? bot.positions : []).map(
         (p) => ({ product: p.product, quantity: p.quantity }),
       ),
@@ -288,6 +322,14 @@ export class Engine {
             regime: a.regime?.choice ?? null,
             quality: a.quality?.choice ?? null,
             fit: Number.isFinite(a.fit?.score) ? a.fit.score : null,
+          };
+        const rc = recentCloses[f.product];
+        if (rc)
+          out.lastClose = {
+            minsAgo: rc.minsAgo,
+            pnlPct: rc.pnlPct,
+            win: rc.win,
+            why: rc.why,
           };
         return out;
       }),
@@ -771,6 +813,14 @@ export class Engine {
           } else {
             this.health.laya = { ready: false, disabled: true, at: Date.now() };
           }
+          // Coins this bot closed recently, shown to Laya so it can weigh
+          // re-entering one (no hard cooldown).
+          const recentCloses = this.recentCloses(
+            this.store.read().orders,
+            id,
+            rules.timeframe,
+            runtime.reentryLookbackBars,
+          );
           const day = new Date().toISOString().slice(0, 10);
           let d;
           let llmUsage = false;
@@ -799,12 +849,13 @@ export class Engine {
             let evidence = null;
             if (usesJev && this.jev) {
               const read = await this.jev.decide({
-                state: this.engineState(id, analyzed, bot),
+                state: this.engineState(id, analyzed, bot, recentCloses),
                 menu: buildMenu({
                   id,
                   candidates: analyzed,
                   positions,
                   maxPositions,
+                  recentCloses,
                 }),
                 convictionLabels: CONVICTION_LABELS,
               });
@@ -852,8 +903,9 @@ export class Engine {
               candidates: analyzed,
               positions,
               maxPositions,
+              recentCloses,
             });
-            const state = this.engineState(id, analyzed, bot);
+            const state = this.engineState(id, analyzed, bot, recentCloses);
             const read = usesJev
               ? this.jev
                 ? await this.jev.decide({

@@ -14,6 +14,31 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.4.3] - 2026-10-04 - Laya sees a coin it just closed (no cooldown)
+
+A trend-following stop can fire on a pullback and the strategy then re-buys the
+same resumption - a whipsaw - with no memory that it just got stopped out.
+
+### Added
+
+- **Recent-close context for Laya.** Each candidate the bot closed within the
+  lookback window carries `lastClose` (`minsAgo`, `pnlPct`, `win`, `why` - the
+  closing order's reason), and the BUY option in the menu says so (e.g.
+  _"closed 38m ago at -0.8%, protective stop"_). A fixed guidance rule is added to
+  the decision state, and the review gets a per-arm re-entry summary.
+- **`runtime.reentryLookbackBars`** (default 24, bounded, review-tunable),
+  measured in each bot's own signal timeframe (Keeper 1h, Spark 15m, Scout 5m).
+  There is deliberately **no hard cooldown** - Laya is given the information and
+  chooses.
+
+### Verification
+
+- 283 Node tests pass, up from 280: the menu note, the state `lastClose` +
+  guidance, `recentCloses` from the ledger within the window, and the review
+  prompt block.
+
+---
+
 ## [3.4.2] - 2026-10-04 - More candidates per cycle (100), batched
 
 The 32-candidate cap was the per-bot engine slice, not the data: the collector

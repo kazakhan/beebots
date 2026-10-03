@@ -973,6 +973,7 @@ test("the review prompt carries the strategy pool and due flags", async () => {
     });
     assert.ok(seen.includes("STRATEGY POOL"));
     assert.ok(seen.includes("STRATEGY DUE"));
+    assert.ok(seen.includes("RE-ENTRY CONTEXT"));
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

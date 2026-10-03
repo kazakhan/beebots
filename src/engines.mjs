@@ -99,6 +99,7 @@ export function buildMenu({
   candidates = [],
   positions = [],
   maxPositions = 1,
+  recentCloses = {},
 }) {
   const held = new Set(positions.map((p) => p.product));
   const room = positions.length < Number(maxPositions || 1);
@@ -114,7 +115,12 @@ export function buildMenu({
     ) {
       // Only offer an executable entry: the offered set equals the accepted set,
       // so a System One engine cannot pick a move the risk layer will refuse.
-      menu[`BUY ${c.product}`] = `Enter a new long ${c.product} position`;
+      // If the bot recently closed this product, say so where it chooses.
+      const rc = recentCloses[c.product];
+      const note = rc
+        ? ` (closed ${rc.minsAgo}m ago at ${rc.pnlPct >= 0 ? "+" : ""}${rc.pnlPct}%, ${rc.why ?? "exit"})`
+        : "";
+      menu[`BUY ${c.product}`] = `Enter a new long ${c.product} position${note}`;
     }
   }
   menu.SKIP = "No trade this cycle";

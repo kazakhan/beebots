@@ -265,6 +265,10 @@ export function closedRoundTrips(orders) {
         opened: p.opened,
         closed: o.created,
         pnl,
+        // Cost basis and the closing reason, so a caller can compute the P&L %
+        // and say why the trade was closed.
+        cost: basis,
+        reason: o.reason ?? null,
       });
       p.quantity -= q;
       p.cost -= basis;
@@ -555,10 +559,35 @@ export class TradeReview {
       maxCandidates: 25,
       modelMaxCallsPerDay: this.config.model?.maxCallsPerDay ?? 1000,
       scoutCategories: ["meme", "speculative", "unclassified"],
+      reentryLookbackBars: 24,
     };
     const over = readJsonOverride(this.dataDir, "runtime", null);
     if (over && !validateParams("runtime", over)) Object.assign(base, over);
     return base;
+  }
+  // Per-arm recent-close / re-entry evidence: how many positions were closed
+  // inside the re-entry lookback window and their net realised P&L, so the model
+  // can judge the window.
+  reentryStats(orders) {
+    const bars = Number(this.effectiveRuntime().reentryLookbackBars) || 24;
+    const trips = closedRoundTrips(orders);
+    const out = {};
+    for (const arm of STRATEGY_ARMS) {
+      const barMs = { "5m": 300000, "15m": 900000, "1h": 3600000 }[
+        this.effectiveParams(arm).timeframe
+      ] ?? 900000;
+      const since = Date.now() - bars * barMs;
+      const recent = (trips[arm] ?? []).filter((t) => t.closed >= since);
+      const pnl = recent.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
+      out[arm] = {
+        windowBars: bars,
+        closes: recent.length,
+        wins: recent.filter((t) => t.pnl > 0n).length,
+        losses: recent.filter((t) => t.pnl < 0n).length,
+        pnl: Number(pnl.toFixed(2)),
+      };
+    }
+    return out;
   }
   // Only the tunable keys, so the model sees the shape it may rewrite.
   paramView(id) {
@@ -768,6 +797,8 @@ export class TradeReview {
           Object.keys(STRATEGY_POOL).join(", ") +
           "\n\nSTRATEGY DUE (10 closed trades without beating Dice: replace the strategy)\n" +
           JSON.stringify(this.strategyDue(s.orders)) +
+          "\n\nRE-ENTRY CONTEXT (closes inside the reentryLookbackBars window)\n" +
+          JSON.stringify(this.reentryStats(s.orders)) +
           "\n\nCURRENT TARGETS\n" +
           JSON.stringify(this.currentTargets()) +
           "\n\nTIMEFRAME COMPARISON (code-generated simulation over the candles " +
@@ -893,6 +924,7 @@ export class TradeReview {
       layaPerf: perf,
       timeframeLab,
       strategyDue: this.strategyDue(s.orders),
+      reentry: this.reentryStats(s.orders),
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },

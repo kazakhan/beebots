@@ -88,6 +88,18 @@ without beating Dice on realised P&L, the review replaces the losing strategy
 rather than nudging it. Open positions are left to resolve; new entries use the
 new strategy. `maxCandidates` is never review-tunable.
 
+## Recent-close context (no cooldown)
+
+When Laya decides, each candidate that the bot closed recently carries a
+`lastClose` (`minsAgo`, `pnlPct`, `win`, `why`) and the BUY option in the menu
+says so (e.g. _"closed 38m ago at -0.8%, protective stop"_), with a fixed
+guidance rule: prefer SKIP over BUY unless the new setup is clearly stronger —
+a stop-out on the same pullback usually whipsaws. **Only the window is tunable**
+(`runtime.reentryLookbackBars`, default 24, measured in each bot's own signal
+timeframe). There is deliberately **no hard cooldown** — the engine gives Laya
+the information and lets it choose. The review receives a per-arm re-entry
+summary so the window can be tuned with data.
+
 ## Batch analysis
 
 The Laya daemon supports a batched request (`{"batch":[…]}`) and advertises

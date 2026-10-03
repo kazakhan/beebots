@@ -60,6 +60,8 @@ export const RUNTIME_SCHEMA = {
   maxCandidates: { min: 1, max: 50, int: true },
   modelMaxCallsPerDay: { min: 1, max: 100000, int: true },
   scoutCategories: { list: ["meme", "speculative", "unclassified"] },
+  // How far back (in a bot's own signal bars) a recent close is shown to Laya.
+  reentryLookbackBars: { min: 1, max: 200, int: true },
 };
 
 // Structural parameters the review must never change. They stay in the schemas

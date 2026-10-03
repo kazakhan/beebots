@@ -239,3 +239,90 @@ test("effectiveRules pins maxCandidates to 100 even with a hostile override", ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("engineState carries recent-close context and the guidance", () => {
+  const f = fixture();
+  try {
+    const state = f.engine.engineState(
+      "trend",
+      [{ product: "X-USDC", setupEligible: true }],
+      { positions: [] },
+      {
+        "X-USDC": {
+          minsAgo: 60,
+          pnlPct: -1.2,
+          win: false,
+          why: "Strategy protective stop",
+        },
+      },
+    );
+    assert.match(state.guidance, /recently closed/);
+    assert.equal(state.candidates[0].lastClose.why, "Strategy protective stop");
+    assert.equal(state.candidates[0].lastClose.win, false);
+    assert.equal(state.candidates[0].lastClose.pnlPct, -1.2);
+  } finally {
+    f.store.close();
+  }
+});
+
+test("recentCloses reads the ledger within the window", () => {
+  const f = fixture();
+  try {
+    const now = Date.now();
+    const orders = {
+      a: {
+        id: "a",
+        bot: "trend",
+        product: "X-USDC",
+        side: "BUY",
+        status: "SETTLED",
+        filled: "1",
+        value: "100",
+        fees: "0.5",
+        created: now - 7200000,
+      },
+      b: {
+        id: "b",
+        bot: "trend",
+        product: "X-USDC",
+        side: "SELL",
+        status: "SETTLED",
+        filled: "1",
+        value: "102",
+        fees: "0.5",
+        created: now - 3600000,
+        reason: "Strategy protective stop",
+      },
+      c: {
+        id: "c",
+        bot: "trend",
+        product: "OLD-USDC",
+        side: "BUY",
+        status: "SETTLED",
+        filled: "1",
+        value: "100",
+        fees: "0",
+        created: now - 40 * 3600000,
+      },
+      d: {
+        id: "d",
+        bot: "trend",
+        product: "OLD-USDC",
+        side: "SELL",
+        status: "SETTLED",
+        filled: "1",
+        value: "100",
+        fees: "0",
+        created: now - 39 * 3600000,
+        reason: "Strategy protective stop",
+      },
+    };
+    const rc = f.engine.recentCloses(orders, "trend", "1h", 24);
+    assert.ok(rc["X-USDC"], "the recent close is included");
+    assert.equal(rc["X-USDC"].why, "Strategy protective stop");
+    assert.equal(rc["X-USDC"].win, true);
+    assert.ok(!rc["OLD-USDC"], "a close older than the window is excluded");
+  } finally {
+    f.store.close();
+  }
+});

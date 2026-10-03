@@ -148,3 +148,37 @@ test("with an id the menu offers BUY only for entry-eligible candidates", () => 
   assert.ok(!Object.hasOwn(menu, "BUY CCC-USDC"), "lost channel excluded");
   assert.ok(Object.hasOwn(menu, "SKIP"));
 });
+
+test("the menu notes a recently closed product on the BUY option", () => {
+  const c = {
+    product: "AAA-USDC",
+    setupEligible: true,
+    ask: 100,
+    maxEntry: 101,
+    stopPrice: 95,
+    bid: 100.5,
+    channelHigh: 99,
+  };
+  const menu = buildMenu({
+    id: "trend",
+    candidates: [c],
+    positions: [],
+    maxPositions: 1,
+    recentCloses: {
+      "AAA-USDC": {
+        minsAgo: 38,
+        pnlPct: -0.8,
+        why: "Strategy protective stop",
+      },
+    },
+  });
+  assert.match(menu["BUY AAA-USDC"], /closed 38m ago at -0.8%/);
+  // Without a recent close, the plain label is unchanged.
+  const plain = buildMenu({
+    id: "trend",
+    candidates: [c],
+    positions: [],
+    maxPositions: 1,
+  });
+  assert.equal(plain["BUY AAA-USDC"], "Enter a new long AAA-USDC position");
+});
