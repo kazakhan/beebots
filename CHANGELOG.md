@@ -14,6 +14,41 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.8] - 2026-10-03 - The three strategies share Keeper's core
+
+Keeper (`trend`) was the only arm making money (6W/5L, +0.28) while Scout
+(`breakout`, 0W/6L) and Spark (`momentum`, 6W/14L) lost. Scout and Spark now
+build on the same core that makes Keeper work, and stay distinct through their
+trigger, timeframe and universe.
+
+### Changed
+
+- **Shared core (`trendCore`)**: a completed **4h uptrend** plus an orderly
+  **EMA20 pullback** on the signal timeframe is now required by **all three**
+  strategies. The pullback window is the tunable `pullbackBars` (now on every
+  bot: Keeper 5, Scout 15, Spark 5).
+- **Distinct triggers:**
+  - **Keeper (`trend`)** — unchanged: a 15m resumption close above the prior
+    high and the signal EMA20.
+  - **Scout (`breakout`)** — the core plus a **breakout above the pre-breakout
+    range on a relative-volume surge**, on 5m. The old compression / volatility /
+    close-location gates were removed (Keeper's core replaces them).
+  - **Spark (`momentum`)** — the core plus **positive 24h/7d momentum, hourly
+    price above EMA20 and a 15m continuation breakout**, then the top-quintile
+    momentum ranking (`rankMomentum`) is still applied.
+- The strategy rubrics (`strategies/v2/*.md`) and `SYSTEM.md` describe the shared
+  core and the three distinctions.
+- All knobs remain review-tunable (`pullbackBars`, `rangeBars`, `relativeVolume`,
+  `maxExtensionAtr`, `topFraction`, … are in the override schema).
+
+### Verification
+
+- 269 Node tests pass: the strategies unit-tested on synthetic frames (Keeper
+  core, Scout's range/volume trigger, the momentum ranking), and the full suite
+  green.
+
+---
+
 ## [3.3.7] - 2026-10-03 - The LLM review is shown again; Laya's review is always shown
 
 In 3.3.4 a failed LLM review was replaced by a Laya self-tune line and the last

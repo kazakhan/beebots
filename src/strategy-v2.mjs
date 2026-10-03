@@ -18,6 +18,9 @@ export const defaults = {
     maxCostRisk: 0.4,
     trailAtr: 2,
     trailR: 2,
+    // Shared Keeper core (3.3.8): the pullback window, measured on the signal
+    // timeframe, then Scout's own range-breakout trigger.
+    pullbackBars: 15,
     // Defaults are the starting point; the Trade Review tunes them (bounded by
     // the override schema). Scout scans every tradeable market, meme and new
     // listings ranked first.
@@ -47,6 +50,9 @@ export const defaults = {
     maxCostRisk: 0.2,
     trailAtr: 2.5,
     trailR: 2,
+    // Shared Keeper core (3.3.8): the pullback window, then Spark's momentum
+    // trigger and top-quintile ranking.
+    pullbackBars: 5,
     timeframe: "15m",
     minSignalBars: 4,
     cadenceMs: 300000,
@@ -101,6 +107,51 @@ export function aggregate(rows, seconds) {
       volume: g.reduce((s, x) => s + x.volume, 0),
     }));
 }
+// Keeper's core, shared by every strategy (3.3.8): a completed 4h uptrend with
+// an orderly EMA20 pullback on the signal timeframe. Each strategy supplies its
+// own trigger on top of it, so the three stay distinct while all lean on the
+// pattern that outperforms Dice. `fail(false, reason)` records a rejection.
+// Sets the 4h EMAs and atr on `f` and returns the atr and the pullback stop.
+export function trendCore(f, ctx, prior, rules, fail) {
+  const a = atr(prior),
+    prices = ctx.map((x) => x.close),
+    a20 = ema(prices, 20),
+    a50 = ema(prices, 50);
+  f.atr = a;
+  f.ema20 = a20;
+  f.ema50 = a50;
+  f.contextClose = prices.at(-1);
+  fail(
+    f.contextClose > a20 && a20 > a50 && a50 > ema(prices.slice(0, -5), 50),
+    "Four-hour uptrend not established",
+  );
+  const pullback = prior.slice(-Math.max(1, Number(rules.pullbackBars) || 5));
+  const zones = pullback.map((bar, i) => {
+    const tail = prior.slice(0, prior.length - pullback.length + i + 1);
+    return {
+      bar,
+      e20: ema(
+        tail.map((x) => x.close),
+        20,
+      ),
+      e50: ema(
+        tail.map((x) => x.close),
+        50,
+      ),
+    };
+  });
+  fail(
+    zones.some(
+      (x) => x.bar.low <= x.e20 + 0.5 * a && x.bar.high >= x.e20 - 0.5 * a,
+    ),
+    "No orderly EMA20 pullback",
+  );
+  fail(
+    zones.every((x) => x.bar.close >= x.e50),
+    "Pullback lost EMA50",
+  );
+  return { a, stop: Math.min(...pullback.map((x) => x.low)) - 0.25 * a };
+}
 export function evaluate(id, frames, rules, membership) {
   const r = { ...defaults[id], ...rules },
     c = frames.five,
@@ -131,93 +182,56 @@ export function evaluate(id, frames, rules, membership) {
   };
   if (id === "breakout") {
     const minBars = Number(r.minSignalBars) || 120;
-    if (bars.length < minBars)
+    if (bars.length < Math.max(minBars, 15) || (ctx?.length ?? 0) < 250)
       throw Error(
         `Scout signal history warming (${bars.length}/${minBars} bars)`,
       );
+    // Shared Keeper core: completed 4h uptrend + orderly EMA20 pullback.
+    const { a, stop } = trendCore(f, ctx, prior, r, fail);
+    // Scout's distinct trigger: a fresh breakout above the pre-breakout
+    // consolidation range, on a relative-volume surge.
     const range = prior.slice(-r.rangeBars),
-      a = atr(prior),
       vols = range.map((x) => x.volume);
-    const reference = Array.from({ length: 100 }, (_, i) =>
-      atr(prior.slice(0, prior.length - i)),
-    );
-    f.atr = a;
     f.channelHigh = Math.max(...range.map((x) => x.high));
     f.channelLow = Math.min(...range.map((x) => x.low));
     f.relativeVolume = median(vols) > 0 ? last.volume / median(vols) : 0;
-    f.compressionAtr = (f.channelHigh - f.channelLow) / a;
-    fail(f.compressionAtr <= r.rangeAtr, "Range not compressed");
-    // Loosened in 2.3.0: was `a < median(reference)`, which vetoed almost every
-    // candidate. The live panel showed SHIB, PNUT and BASECAT failing only on
-    // this test. Contraction is now measured relative to the rolling median.
-    fail(a < 1.5 * median(reference), "Volatility not contracted");
+    f.compressionAtr = a > 0 ? (f.channelHigh - f.channelLow) / a : 0;
     fail(close > f.channelHigh, "No completed breakout close");
-    // Loosened in 2.3.0: was >= 0.75, which rejected PNUT, BASECAT and GHST.
-    fail(
-      last.high > last.low &&
-        (close - last.low) / (last.high - last.low) >= 0.5,
-      "Weak breakout close location",
-    );
     fail(f.relativeVolume >= r.relativeVolume, "Relative volume insufficient");
-    f.stopPrice = Math.max(f.channelLow, f.channelHigh - 1.5 * a);
-    fail(close - f.stopPrice >= 0.5 * a, "Stop inside execution noise");
-    f.maxEntry = f.channelHigh + r.maxExtensionAtr * a;
+    f.stopPrice = stop;
+    fail(close - f.stopPrice <= 3 * a, "Breakout stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = close / f.channelHigh;
   } else if (id === "trend") {
-    if (ctx.length < 250 || bars.length < (Number(r.minSignalBars) || 60))
+    if (
+      (ctx?.length ?? 0) < 250 ||
+      bars.length < (Number(r.minSignalBars) || 60)
+    )
       throw Error("Keeper context history warming");
-    const prices = ctx.map((x) => x.close),
-      hp = prior.map((x) => x.close),
-      a = atr(prior);
-    f.atr = a;
-    f.ema20 = ema(prices, 20);
-    f.ema50 = ema(prices, 50);
-    f.contextClose = prices.at(-1);
-    fail(
-      f.contextClose > f.ema20 &&
-        f.ema20 > f.ema50 &&
-        f.ema50 > ema(prices.slice(0, -5), 50),
-      "Four-hour uptrend not established",
-    );
-    const pullback = prior.slice(-r.pullbackBars);
-    const zones = pullback.map((bar, i) => {
-      const tail = prior.slice(0, prior.length - r.pullbackBars + i + 1);
-      return {
-        bar,
-        e20: ema(
-          tail.map((x) => x.close),
-          20,
-        ),
-        e50: ema(
-          tail.map((x) => x.close),
-          50,
-        ),
-      };
-    });
-    fail(
-      zones.some(
-        (x) => x.bar.low <= x.e20 + 0.5 * a && x.bar.high >= x.e20 - 0.5 * a,
-      ),
-      "No orderly EMA20 pullback",
-    );
-    fail(
-      zones.every((x) => x.bar.close >= x.e50),
-      "Pullback lost EMA50",
-    );
+    const { a, stop } = trendCore(f, ctx, prior, r, fail);
+    const hp = prior.map((x) => x.close);
+    // Keeper's distinct trigger: a resumption close above the prior high and
+    // above the signal-timeframe EMA20.
     fail(
       close > prior.at(-1).high && close > ema([...hp, close], 20),
       "No hourly resumption close",
     );
-    f.stopPrice = Math.min(...pullback.map((x) => x.low)) - 0.25 * a;
+    f.stopPrice = stop;
     fail(close - f.stopPrice <= 3 * a, "Pullback stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = f.ema20 / f.ema50;
   } else {
-    if (h.length < 200 || bars.length < (Number(r.minSignalBars) || 4))
+    const minBars = Number(r.minSignalBars) || 4;
+    if (
+      h.length < 200 ||
+      bars.length < Math.max(minBars, 15) ||
+      (ctx?.length ?? 0) < 250
+    )
       throw Error("Spark seven-day history warming");
-    const hp = h.map((x) => x.close);
-    f.atr = atr(h);
-    f.ema20 = ema(hp, 20);
+    // Shared Keeper core, then Spark's momentum trigger.
+    const { a, stop } = trendCore(f, ctx, prior, r, fail);
+    const hp = h.map((x) => x.close),
+      ema20h = ema(hp, 20);
     f.hourClose = hp.at(-1);
     f.momentum24hPct = (hp.at(-1) / hp.at(-25) - 1) * 100;
     f.momentum7dPct = (hp.at(-1) / hp.at(-169) - 1) * 100;
@@ -225,13 +239,14 @@ export function evaluate(id, frames, rules, membership) {
       f.momentum24hPct > 0 && f.momentum7dPct > 0,
       "Momentum not positive on both horizons",
     );
-    fail(hp.at(-1) > f.ema20, "Hourly price below EMA20");
+    fail(hp.at(-1) > ema20h, "Hourly price below EMA20");
     fail(
       close > Math.max(...prior.slice(-3).map((x) => x.high)),
       "No 15-minute continuation breakout",
     );
-    f.stopPrice = close - 2 * f.atr;
-    f.maxEntry = f.ema20 + 2 * f.atr;
+    f.stopPrice = stop;
+    fail(close - f.stopPrice <= 3 * a, "Continuation stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
     f.rankScore = 0;
     f.rankTime = h.at(-1).time + 3600000;
   }

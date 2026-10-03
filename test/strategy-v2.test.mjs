@@ -383,40 +383,24 @@ test("aggregation never invents incomplete 15 minute bars", () => {
   assert.equal(aggregate(rows, 900).length, 1);
 });
 test("Scout uses a prior range and rejects chasing (any category)", () => {
-  const five = Array.from({ length: 210 }, (_, i) => ({
-    ...bar(i),
-    high: 100 + (i < 110 ? 1 : 0.2),
-    low: 100 - (i < 110 ? 1 : 0.2),
-  }));
-  five[209] = {
-    ...bar(209),
-    open: 100.1,
-    close: 100.3,
-    high: 100.31,
-    low: 100.1,
-    volume: 300,
-  };
-  const f = evaluate(
-    "breakout",
-    { five },
-    { rangeAtr: 4, relativeVolume: 2, maxExtensionAtr: 0.5 },
-    { category: "meme" },
-  );
-  assert.equal(f.channelHigh, 100.2);
-  assert.equal(f.relativeVolume, 3);
+  const f = evaluate("breakout", scoutFrame(), {}, { category: "meme" });
+  assert.equal(f.channelHigh, 100.5);
+  assert.equal(f.relativeVolume, 5);
+  assert.equal(f.setupEligible, true, "Keeper core + range breakout");
   assert.equal(
     entryEligible("breakout", {
       ...f,
       setupEligible: true,
       ask: f.maxEntry + 0.01,
-      bid: 100.3,
+      bid: f.close,
     }),
     false,
+    "chasing past maxEntry is rejected",
   );
   // Scout scans every tradeable category; membership is no longer a veto.
   const other = evaluate(
     "breakout",
-    { five },
+    scoutFrame(),
     {},
     { category: "unclassified" },
   );
@@ -857,137 +841,111 @@ test("a usage write failure never prevents the decision from being recorded", as
   s.close();
 });
 
-// --- Scout loosening (2.3.0) ---------------------------------------------
-// These shapes come from the live coverage panel that motivated the change:
-// genuine breakout closes rejected by four independent edges at once.
-function breakoutFrame({
+// --- Scout shares Keeper's core (3.3.8) ----------------------------------
+// A completed 4h uptrend context, an orderly EMA20 pullback on the signal
+// timeframe, and Scout's own range-breakout trigger.
+function risingFour(n = 260, base = 100) {
+  return Array.from({ length: n }, (_, i) => ({
+    time: i * 14400000,
+    open: base + i * 0.1,
+    high: base + i * 0.1 + 1,
+    low: base + i * 0.1 - 1,
+    close: base + i * 0.1,
+    volume: 1,
+  }));
+}
+function scoutFrame({
+  n = 210,
+  base = 100,
   half = 0.5,
-  rangeHalf = null,
-  recentHalf = null,
-  closeOffset = 0.5,
   lastVolume = 5,
+  breakoutOffset = 0.5,
   closeBelowHigh = false,
-  closeLocationHigh = null,
+  four = risingFour(),
 } = {}) {
-  const base = 100,
-    n = 210;
-  const bars = [];
-  for (let i = 0; i < n; i++) {
-    const h = i >= n - 14 && recentHalf != null ? recentHalf : half;
-    bars.push({
+  const five = [];
+  for (let i = 0; i < n; i++)
+    five.push({
       time: i * 300000,
       open: base,
-      high: base + h,
-      low: base - h,
+      high: base + half,
+      low: base - half,
       close: base,
       volume: 1,
     });
-  }
-  // A wide extreme at the first bar of the 24-bar channel window widens the
-  // range without touching the 14-bar ATR window, so compressionAtr can be set
-  // independently of atr.
-  if (rangeHalf != null) {
-    const idx = n - 25;
-    bars[idx] = { ...bars[idx], high: base + rangeHalf, low: base - rangeHalf };
-  }
-  const prior = bars.slice(0, -1);
-  const chHigh = Math.max(...prior.slice(-24).map((b) => b.high));
-  const last = bars[n - 1];
-  const close = closeBelowHigh ? chHigh - 0.1 : chHigh + closeOffset;
+  const prior = five.slice(0, -1);
+  const rangeHigh = Math.max(...prior.slice(-24).map((b) => b.high));
+  const last = five[n - 1];
+  const close = closeBelowHigh ? rangeHigh - 0.1 : rangeHigh + breakoutOffset;
   last.close = close;
   last.volume = lastVolume;
-  last.high = closeLocationHigh != null ? close + closeLocationHigh : close;
+  last.high = close;
   last.low = close - 2 * half;
-  return { five: bars, hour: [], four: [] };
+  return { five, hour: [], four };
 }
 const meme = { category: "meme" };
 const scout = (f, rules = defaults.breakout) =>
   evaluate("breakout", f, rules, meme);
 
-test("Scout defaults are the loosened 2.3.0 values", () => {
-  assert.equal(defaults.breakout.rangeAtr, 6);
-  assert.equal(defaults.breakout.maxExtensionAtr, 2);
-  assert.equal(defaults.breakout.maxCostRisk, 0.4);
-  // Deliberately unchanged: the live panel showed these were never the blocker.
-  assert.equal(defaults.breakout.relativeVolume, 2);
-  assert.equal(defaults.breakout.riskPct, 1);
-});
-
-test("a completed breakout with compressed range is eligible", () => {
-  const f = scout(breakoutFrame());
+test("Scout shares Keeper's core, with its own breakout trigger", () => {
+  assert.equal(defaults.breakout.pullbackBars, 15);
+  const f = scout(scoutFrame());
   assert.equal(f.setupEligible, true);
   assert.deepEqual(f.reasons, []);
+  assert.ok(f.contextClose > f.ema20 && f.ema20 > f.ema50, "4h uptrend set");
 });
 
-test("a compressed-range breakout that the old rangeAtr 4 rejected now passes", () => {
-  // SHIB ran compressionAtr 5.30 against a 4.0 limit.
-  const frames = breakoutFrame({ rangeHalf: 2.65 });
-  assert.equal(scout(frames).compressionAtr.toFixed(2), "5.30");
-  assert.equal(scout(frames).setupEligible, true, "rangeAtr 6 admits it");
-  const old = scout(frames, { ...defaults.breakout, rangeAtr: 4 });
-  assert.equal(old.setupEligible, false, "rangeAtr 4 rejected it");
-  assert.ok(old.reasons.includes("Range not compressed"));
-});
-
-test("a breakout extended past the old 0.5-ATR cap now passes", () => {
-  // USELESS and PNUT were rejected only as "Move already extended".
-  const frames = breakoutFrame({ closeOffset: 1.5 });
-  assert.equal(
-    scout(frames).setupEligible,
-    true,
-    "maxExtensionAtr 2 admits it",
-  );
-  const old = scout(frames, { ...defaults.breakout, maxExtensionAtr: 0.5 });
-  assert.equal(old.setupEligible, false);
-  assert.ok(old.reasons.some((r) => /extended/.test(r)));
-});
-
-test("a weaker close location is now accepted", () => {
-  // PNUT, BASECAT and GHST failed on close location alone.
-  const frames = breakoutFrame({ closeLocationHigh: 0.667 }); // ~0.6 of the bar
-  assert.equal(scout(frames).setupEligible, true, "0.5 threshold admits it");
-});
-
-test("moderate volatility expansion is tolerated, extreme is not", () => {
-  // Was `atr < median`; now `atr < 1.5 * median`.
-  assert.equal(
-    scout(breakoutFrame({ recentHalf: 0.7 })).setupEligible,
-    true,
-    "1.4x the median is tolerated",
-  );
-  const wild = scout(breakoutFrame({ recentHalf: 1.0 }));
-  assert.equal(wild.setupEligible, false, "2x the median is still rejected");
-  assert.ok(wild.reasons.includes("Volatility not contracted"));
-});
-
-test("the breakout requirement itself is NOT loosened", () => {
-  // A close below the channel high is still not a breakout.
-  const f = scout(breakoutFrame({ closeBelowHigh: true }));
+test("Scout rejects a close below the range high", () => {
+  const f = scout(scoutFrame({ closeBelowHigh: true }));
   assert.equal(f.setupEligible, false);
   assert.ok(f.reasons.includes("No completed breakout close"));
 });
 
-test("relative volume remains a 2x threshold", () => {
-  assert.equal(scout(breakoutFrame({ lastVolume: 2 })).setupEligible, true);
-  const thin = scout(breakoutFrame({ lastVolume: 1.9 }));
+test("Scout requires the relative-volume surge", () => {
+  assert.equal(scout(scoutFrame({ lastVolume: 2 })).setupEligible, true);
+  const thin = scout(scoutFrame({ lastVolume: 1.9 }));
   assert.equal(thin.setupEligible, false);
   assert.ok(thin.reasons.includes("Relative volume insufficient"));
 });
 
+test("Scout rejects a market with no 4h uptrend", () => {
+  const fall = Array.from({ length: 260 }, (_, i) => ({
+    time: i * 14400000,
+    open: 200 - i * 0.2,
+    high: 200 - i * 0.2 + 1,
+    low: 200 - i * 0.2 - 1,
+    close: 200 - i * 0.2,
+    volume: 1,
+  }));
+  const f = scout(scoutFrame({ four: fall }));
+  assert.equal(f.setupEligible, false);
+  assert.ok(f.reasons.includes("Four-hour uptrend not established"));
+});
+
 test("Scout's warm-up is tunable via minSignalBars", () => {
   const five = Array.from({ length: 130 }, (_, i) => bar(i));
-  // 130 bars clears the new 120 default but not an explicit 150.
+  // 130 bars clears the 120 default but not an explicit 150.
   assert.doesNotThrow(() =>
-    evaluate("breakout", { five }, {}, { category: "unclassified" }),
+    evaluate(
+      "breakout",
+      { five, four: risingFour() },
+      {},
+      { category: "unclassified" },
+    ),
   );
   assert.throws(
     () =>
       evaluate(
         "breakout",
-        { five },
+        { five, four: risingFour() },
         { minSignalBars: 150 },
         { category: "unclassified" },
       ),
+    /warming/,
+  );
+  // The shared Keeper core needs the 4h context too.
+  assert.throws(
+    () => evaluate("breakout", { five }, {}, { category: "unclassified" }),
     /warming/,
   );
 });

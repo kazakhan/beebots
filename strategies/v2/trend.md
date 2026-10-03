@@ -1,5 +1,8 @@
 # Keeper v2 — established trend and pullback resumption
 
+Keeper is the shared core: every strategy requires a completed 4h uptrend and an
+orderly EMA20 pullback on its signal timeframe, then applies its own trigger.
+Keeper's trigger is the resumption close.
 Assess eligible Coinbase USDC markets for a completed 4h uptrend and an orderly hourly
 EMA20 pullback followed by resumption. Only BUY when supplied setupEligible is true and
 price is not extended. No fixed coin list or absolute turnover requirement applies.

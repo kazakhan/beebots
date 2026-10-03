@@ -22,11 +22,18 @@ being better than luck.
 - **The LLM** — an optional provider-backed model (selected in the dashboard).
   It can make the trading decision, and/or review the review. It never places
   orders itself; code controls size and execution.
-- **Three strategy bots**, each with a permanently distinct strategy:
-  - `breakout` — Scout: hunts breakouts above a channel.
-  - `trend` — the patient one: follows established trend.
-  - `momentum` — the momentum chaser.
-    The three strategies must always stay distinct; never merge them.
+- **Three strategy bots**, each with a permanently distinct strategy. Since
+  3.3.8 all three share **Keeper's core** — a completed 4h uptrend and an orderly
+  EMA20 pullback on the signal timeframe — and differ in their trigger,
+  timeframe and universe:
+  - `trend` (Keeper) — the baseline: the core plus a **resumption close** above
+    the prior high and the signal EMA20, on 15m.
+  - `breakout` (Scout) — the core plus a **breakout above the pre-breakout range
+    on a relative-volume surge**, on 5m, over meme/speculative markets.
+  - `momentum` (Spark) — the core plus **positive 24h/7d momentum, price above
+    hourly EMA20 and a continuation breakout**, ranked to the top quintile.
+    The three trigger/timeframe/universe combinations must always stay distinct;
+    never merge them.
 - **Dice** (`control`) — the random control arm and the objective baseline.
 
 ## Out of the box
