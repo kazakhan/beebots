@@ -44,7 +44,7 @@ function fixture({ engine, jevResult, layaResult } = {}) {
       asks: [{ price: "101", size: "1000" }],
     }),
   };
-  const seen = { model: [], jev: [], laya: [] };
+  const seen = { model: [], jev: [], laya: [], analyze: [] };
   const model = {
     resolve: () => ({
       provider: "deepseek",
@@ -67,14 +67,17 @@ function fixture({ engine, jevResult, layaResult } = {}) {
     },
   };
   const laya = {
-    analyze: async () => ({
-      answers: {
-        fit: { score: 1.2 },
-        regime: { choice: "range" },
-        quality: { choice: "mixed" },
-      },
-      queue_depth: 0,
-    }),
+    analyze: async () => {
+      seen.analyze.push(1);
+      return {
+        answers: {
+          fit: { score: 1.2 },
+          regime: { choice: "range" },
+          quality: { choice: "mixed" },
+        },
+        queue_depth: 0,
+      };
+    },
     decide: async (args) => {
       seen.laya.push(args);
       return (
@@ -394,5 +397,36 @@ test("Scout considers a non-meme market (no category gate)", async () => {
     seen.model.some((a) => a.candidates.some((c) => c.product === "XYZ-USDC")),
     "a non-meme candidate reached the model",
   );
+  s.close();
+});
+
+// --- Laya analyses whenever it is in the engine (3.3.5) -------------------
+// Regression: Laya analysis was keyed to engine "laya+llm"; when the default
+// engine became "laya" the strategy bots stopped being analysed.
+test("the laya engine analyses candidates and its decision sees that analysis", async () => {
+  const { s, engine, seen } = fixture({ engine: "laya" });
+  await engine.cycle();
+  assert.ok(seen.analyze.length >= 1, "laya.analyze ran");
+  const rows = s.db
+    .prepare("SELECT COUNT(*) n FROM events WHERE kind='analysis'")
+    .get();
+  assert.ok(rows.n >= 1, "analysis events were emitted");
+  const withAnalysis = seen.laya.find((a) =>
+    (a.state?.candidates ?? []).some((c) => c.analysis),
+  );
+  assert.ok(withAnalysis, "the decide state carried the analysis");
+  assert.ok(
+    withAnalysis.state.candidates.some(
+      (c) => c.analysis?.regime === "range" && c.analysis?.fit === 1.2,
+    ),
+    "the classification fields reached Laya's decision",
+  );
+  s.close();
+});
+
+test("an engine without Laya does not run Laya analysis", async () => {
+  const { s, engine, seen } = fixture({ engine: "llm" });
+  await engine.cycle();
+  assert.equal(seen.analyze.length, 0, "no laya.analyze for engine llm");
   s.close();
 });

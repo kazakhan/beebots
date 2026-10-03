@@ -32,7 +32,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.3.4";
+const BUILD = "3.3.5";
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -270,6 +270,16 @@ export class Engine {
         const out = { product: f.product, held: !!f.held };
         for (const k of keys)
           if (Number.isFinite(f[k])) out[k] = Number(f[k].toPrecision(6));
+        // Laya's own classification of this candidate, so the decision uses it.
+        // The original design fed analysed candidates into the decision; do not
+        // drop this or Laya decides blind to its own analysis.
+        const a = f.analysis?.answers;
+        if (a)
+          out.analysis = {
+            regime: a.regime?.choice ?? null,
+            quality: a.quality?.choice ?? null,
+            fit: Number.isFinite(a.fit?.score) ? a.fit.score : null,
+          };
         return out;
       }),
     };
@@ -628,12 +638,14 @@ export class Engine {
           const engine = this.engineId();
           const usesJev = engineUses(engine, "jev");
           const llmDecides = engineUses(engine, "llm");
-          // Laya+LLM attaches Laya's per-candidate classification as evidence.
-          // Every other engine either asks one action question (Jev/Laya,
-          // below) or skips analysis (LLM only). A failed classification
+          // Laya analyses candidates whenever it is part of the engine (laya,
+          // laya+llm). This ran from day one and must NOT be keyed to the LLM
+          // engine id: the analysis feeds the decision and the review's per-arm
+          // metrics, whether Laya or the LLM makes the final call. Engines with
+          // no Laya (llm, jev, jev+llm) skip it. A failed classification
           // degrades that one candidate rather than aborting the bot.
           let analyzed = candidates;
-          if (engine === "laya+llm") {
+          if (engineUses(engine, "laya")) {
             analyzed = [];
             for (const f of candidates) {
               if (this.stopped) return;

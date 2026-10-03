@@ -56,6 +56,16 @@ and must never be coupled:
    turn off the LLM review. If the LLM review is on but unavailable or its reply
    is unusable, the review falls back to Laya's self-tune — it never fails.
 
+## Laya analysis (always runs when Laya is in the engine)
+
+Whenever Laya is part of the decision engine (`laya` or `laya+llm`), it analyses
+every entry-qualifying candidate and records the classification. That analysis
+is fed into the decision — Laya's own decision when Laya decides, the LLM's when
+the LLM decides — and it feeds the review's per-arm performance. It ran from day
+one and must **never** be keyed to the LLM engine id: the engine gate for it is
+"does this engine use Laya", not "is the engine `laya+llm`". An engine with no
+Laya (`llm`, `jev`, `jev+llm`) does not run it.
+
 ## The hourly review pipeline
 
 The review runs every hour at `:00`, and once on startup for the hour that just

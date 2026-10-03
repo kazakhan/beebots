@@ -14,6 +14,37 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.3.5] - 2026-10-03 - Laya analyses whenever it is in the engine, and the decision uses it
+
+Laya stopped analysing the strategy bots. The per-candidate analysis loop was
+keyed to `engine === "laya+llm"`; when 3.3.0 made the default engine `laya`, that
+gate went false and no `breakout`/`trend`/`momentum` analyses were produced. Only
+the control/Dice arm's exit analysis remained, so the Laya analysis panel was
+empty and the review's per-arm metrics had nothing to join.
+
+### Fixed
+
+- **Laya analysis runs whenever the engine uses Laya** (`laya`, `laya+llm`), the
+  gate is now `engineUses(engine, "laya")` — not the LLM engine id. Engines with
+  no Laya (`llm`, `jev`, `jev+llm`) do not run it. This restores the day-one
+  behaviour.
+- **The analysis feeds the decision.** `engineState()` now includes each
+  candidate's classification (regime, quality, fit) when present, so Laya's own
+  `decide` uses the analysis it produced; the LLM path already received the
+  analysed candidates. Previously the System One path stripped the analysis.
+- **Candidates analysed are unchanged** - the same entry-qualifying candidates
+  the working `laya+llm` path analysed.
+- Documented the rule in `SYSTEM.md` and in an `engine.mjs` comment so it cannot
+  be keyed to the LLM engine id again.
+
+### Verification
+
+- 266 Node tests pass, up from 264: with engine `laya`, `laya.analyze` runs per
+  candidate, `analysis` events are emitted, and the decide state carries the
+  classification; with engine `llm`, no Laya analysis runs.
+
+---
+
 ## [3.3.4] - 2026-10-03 - The review stops truncating; the design is written down
 
 The hourly review failed most hours (`Review is not JSON`, then `Review response
