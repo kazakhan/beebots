@@ -16,13 +16,18 @@ import {
   executionPlan,
   VERSION,
   defaults as STRATEGY_DEFAULTS,
+  DEFAULT_STRATEGY,
   entryRejection,
   entryEligible,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
 import { buildTimeframeLab } from "./timeframe-lab.mjs";
 import { closedRoundTrips } from "./review.mjs";
-import { readJsonOverride, validateParams } from "./overrides.mjs";
+import {
+  readJsonOverride,
+  validateParams,
+  PINNED_STRATEGY_BOTS,
+} from "./overrides.mjs";
 import { performance } from "./performance.mjs";
 import { costOf, usageCounts, PROVIDERS, modelLabel } from "./providers.mjs";
 import {
@@ -35,7 +40,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.5.2";
+const BUILD = "3.5.3";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -205,6 +210,9 @@ export class Engine {
     // Fixed structural cap: the review must never change it. Pin it even if a
     // stored override carries a value (the key is locked out of the tunables).
     base.maxCandidates = 100;
+    // The owner pinned these bots' strategy templates; the default is enforced
+    // even if a stored override (or the review) named another.
+    if (PINNED_STRATEGY_BOTS.has(id)) base.strategy = DEFAULT_STRATEGY[id];
     return base;
   }
   // Runtime-wide knobs the review may tune. Defaults are the pre-review values.

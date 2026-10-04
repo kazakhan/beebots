@@ -70,6 +70,18 @@ export const RUNTIME_SCHEMA = {
 // CURRENT TARGETS) and validateOverride refuses any proposal that sets them.
 export const LOCKED_PARAMS = new Set(["maxCandidates"]);
 
+// The owner pinned these bots' strategy templates: the review may tune their
+// numeric params but must not swap the template (the default is enforced in
+// effectiveRules and refused as a proposal).
+export const PINNED_STRATEGY_BOTS = new Set(["breakout", "momentum"]);
+export function strategyPinned(target) {
+  return (
+    typeof target === "string" &&
+    target.startsWith("params.") &&
+    PINNED_STRATEGY_BOTS.has(target.slice("params.".length))
+  );
+}
+
 export const PARAM_KEYS = Object.keys(PARAM_SCHEMA).filter(
   (k) => !LOCKED_PARAMS.has(k),
 );
@@ -196,6 +208,8 @@ export function validateOverride(target, text, { invariantsHold } = {}) {
     if (d && typeof d === "object")
       for (const k of Object.keys(d))
         if (LOCKED_PARAMS.has(k)) return `${k} is a fixed parameter`;
+    if (strategyPinned(target) && d && typeof d === "object" && "strategy" in d)
+      return "strategy is fixed for this bot";
     return validateParams(target, d);
   }
   // Laya's analysis policy: a variant choice plus optional knobs.

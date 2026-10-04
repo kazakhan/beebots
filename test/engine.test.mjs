@@ -389,3 +389,32 @@ test("a rotation position is not sold just for leaving the leader set", () => {
     f.store.close();
   }
 });
+
+test("effectiveRules pins the strategy for breakout and momentum", () => {
+  const c = config();
+  const dir = mkdtempSync(join(tmpdir(), "beebots-pinrules-"));
+  c.dataDir = dir;
+  mkdirSync(join(dir, "overrides"), { recursive: true });
+  writeFileSync(
+    join(dir, "overrides", "params-breakout.json"),
+    JSON.stringify({ strategy: "breakout_retest", riskPct: 1.2 }),
+  );
+  const store = new Store(":memory:", c);
+  try {
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: {},
+      laya: {},
+      model: {},
+    });
+    const b = engine.effectiveRules("breakout");
+    assert.equal(b.strategy, "momentum_rotation_fast", "pinned to the default");
+    assert.equal(b.riskPct, 1.2, "other params still apply");
+    assert.equal(engine.effectiveRules("trend").strategy, "trend_pullback");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

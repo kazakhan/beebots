@@ -14,6 +14,32 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.5.3] - 2026-10-04 - Pin Scout/Spark strategies; drop the Dice comparison
+
+Two owner directives.
+
+### Changed
+
+- **Scout and Spark strategy templates are pinned.** The review may tune their
+  numeric params but cannot swap the template: `strategy` is excluded from their
+  `paramView` (so it is never offered or rewritten), `effectiveRules` enforces
+  `momentum_rotation_fast` (breakout) / `momentum_leaders` (momentum) even if a
+  stored override names another, and `validateOverride` refuses a proposal that
+  sets it. Keeper's template is not pinned.
+- **The review no longer compares against Dice.** The objective is each bot's own
+  realised P&L / equity. The scoreboard shows per-arm P&L with no Dice deltas;
+  `strategyDue` (rotate a loser) triggers on **10 trades and losing money**, not
+  "beating Dice"; the applied-change ledger reports the arm's own P&L (no Dice
+  delta); and `revertLosers` auto-reverts a change that is losing money on its own
+  P&L. The review prompt and instructions were rewritten accordingly.
+
+### Verification
+
+- 297 Node tests pass, up from 293: pinned strategy refused/hidden/enforced, and
+  the scoreboard carries no Dice deltas.
+
+---
+
 ## [3.5.2] - 2026-10-04 - Rotation positions are held; exits are code-managed
 
 The rotation bots were buying a leader and selling it ~5 minutes later. The log

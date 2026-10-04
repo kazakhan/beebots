@@ -10,10 +10,10 @@ BeeBots is a **recursive, self-improving spot-trading system**. It runs a small
 portfolio of independent strategy bots on Coinbase spot markets and improves
 them every hour from their own results.
 
-The objective is concrete and measurable: **each strategy bot must beat Dice**,
-the random control arm — more wins, fewer losses, higher realised P&L. Dice
-places random buys on the same products, so "beating Dice" is the bar for a bot
-being better than luck.
+The objective is concrete and measurable: **increase each strategy bot's
+realised P&L (equity)** — more wins, fewer losses, higher profit. Dice is a
+random control arm kept as a reference only; the review is **not** asked to
+compare against it or to "beat" it.
 
 ## The cast
 
@@ -44,7 +44,7 @@ being better than luck.
   the tunable keys, not in CURRENT TARGETS, pinned in `effectiveRules`/
   `effectiveRuntime`, and any proposal that sets it is refused. The owner set it;
   the loop must not change it.
-- **Dice** (`control`) — the random control arm and the objective baseline.
+- **Dice** (`control`) — the random control arm, kept as a reference.
 
 ## Out of the box
 
@@ -97,10 +97,14 @@ leader minutes after buying it. They are also exempt from the anti-chase
 stop). `evaluate()` dispatches on the selected template.
 
 The Trade Review may reassign a bot to a different template, and is **required**
-to do so when the bot is flagged: after **10 closed trades** without beating Dice
-on realised P&L, the review replaces the losing strategy rather than nudging it.
+to do so when the bot is flagged: after **10 closed trades** and losing money,
+the review replaces the losing strategy rather than nudging it.
 Open positions are left to resolve; new entries use the new strategy.
-`maxCandidates` is never review-tunable.
+`maxCandidates` is never review-tunable. The owner has **pinned** the strategy
+templates for **breakout** and **momentum** (Scout/Spark): their `strategy` is
+excluded from the review's targets and a proposal naming it is refused
+(`effectiveRules` enforces the default regardless). Keeper's template is not
+pinned.
 
 ## Recent-close context (no cooldown)
 
@@ -219,8 +223,8 @@ Every rubric must retain these, or the proposal is refused:
   backed up first, so it can be rolled back.
 - Applied changes are gated: numeric/edge changes need a minimum closed-trade
   sample and can require a matured control baseline.
-- The loop tracks each applied change against Dice and **auto-reverts** a change
-  that is losing.
+- The loop tracks each applied change on its **own** realised P&L and
+  **auto-reverts** a change that is losing money.
 - Nothing applied is silent: it appears on the Trade Review card and in the
   change ledger.
 

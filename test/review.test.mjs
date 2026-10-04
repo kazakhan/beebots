@@ -23,6 +23,7 @@ import {
   tierOf,
   MIN_SAMPLE,
   REVIEW_QUESTIONS,
+  scoreboardLines,
 } from "../src/review.mjs";
 import { validateOverride, overridePath } from "../src/overrides.mjs";
 import { defaultAnalysisQuestions } from "../src/laya.mjs";
@@ -978,4 +979,37 @@ test("the review prompt carries the strategy pool and due flags", async () => {
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a pinned bot's strategy is not offered to the review", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-pinview-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    assert.ok(!reviewer.paramView("breakout").strategy, "breakout hidden");
+    assert.ok(!reviewer.paramView("momentum").strategy, "momentum hidden");
+    assert.equal(
+      reviewer.paramView("trend").strategy,
+      "trend_pullback",
+      "trend is still offered",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the scoreboard shows each arm's own P&L, with no Dice deltas", () => {
+  const lines = scoreboardLines({});
+  assert.ok(lines.some((l) => /SCOREBOARD/.test(l)));
+  assert.ok(
+    !lines.some((l) => /vs Dice|baseline to beat/.test(l)),
+    "no Dice comparison",
+  );
 });

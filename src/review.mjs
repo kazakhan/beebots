@@ -30,10 +30,11 @@
 // `current` back to the requested output: echoing a full 4 KB question set back
 // and forth is what truncates the reply.
 //
-// The objective is to beat the control arm (Dice): more wins, fewer losses.
-// Proposals are applied automatically within hard numeric bounds, and a change
-// that later underperforms Dice is auto-reverted. Everything applied lives as an
-// override under the data directory.
+// The objective is to increase each bot's realised P&L (equity). The control arm
+// (Dice) is still traded and shown as a reference, but the review is NOT asked to
+// compare against it or to "beat" it. Proposals are applied automatically within
+// hard numeric bounds, and a change that is losing money is auto-reverted.
+// Everything applied lives as an override under the data directory.
 import {
   existsSync,
   writeFileSync,
@@ -65,6 +66,7 @@ import {
   PARAM_SCHEMA,
   RUNTIME_KEYS,
   RUNTIME_SCHEMA,
+  PINNED_STRATEGY_BOTS,
 } from "./overrides.mjs";
 
 export { ALLOWED_TARGETS, targetAllowed };
@@ -193,8 +195,8 @@ export const REVIEW_QUESTIONS = {
   primary_bottleneck: {
     type: "choice",
     instructions:
-      "What single thing most limited results this hour? Judge against the " +
-      "scoreboard versus Dice.",
+      "What single thing most limited results this hour? Judge against each " +
+      "bot's own realised P&L and win/loss.",
     criteria: {
       breakout: "Scout's breakout rules",
       trend: "Keeper's trend rules",
@@ -358,8 +360,8 @@ function perfLines(p) {
   return out;
 }
 
-// Per-arm realised P&L and win/loss, with each strategy bot's gap to Dice. This
-// is the objective the review tunes against.
+// Per-arm realised P&L and win/loss. The control arm (Dice) is shown for
+// reference only - the review is not told to beat it.
 export function scoreboardLines(orders) {
   const trips = closedRoundTrips(orders);
   const bots = [...STRATEGY_ARMS, CONTROL_ARM];
@@ -369,15 +371,10 @@ export function scoreboardLines(orders) {
     const wins = list.filter((t) => t.pnl > 0n).length;
     return { bot, n: list.length, wins, loss: list.length - wins, pnl };
   };
-  const rows = bots.map(row);
-  const dice = rows.find((r) => r.bot === CONTROL_ARM) ?? { pnl: 0 };
   const out = ["SCOREBOARD (realised P&L, all-time)"];
-  for (const r of rows)
+  for (const r of bots.map(row))
     out.push(
-      `- ${r.bot}: ${r.n} trades ${r.wins}W/${r.loss}L pnl=${r.pnl.toFixed(2)}` +
-        (r.bot === CONTROL_ARM
-          ? " (Dice, the baseline to beat)"
-          : ` (vs Dice ${(r.pnl - dice.pnl >= 0 ? "+" : "") + (r.pnl - dice.pnl).toFixed(2)})`),
+      `- ${r.bot}: ${r.n} trades ${r.wins}W/${r.loss}L pnl=${r.pnl.toFixed(2)}`,
     );
   return out;
 }
@@ -470,20 +467,21 @@ export function buildHourState({ events, orders, coverage, since, until }) {
 const REVIEW_SYSTEM =
   "You improve an automated spot-trading system with three strategy bots and a " +
   "random control arm named Dice. Your goal is to INCREASE each bot's EQUITY. " +
-  "Beating Dice is necessary but not sufficient: a bot that trails Dice is " +
-  "losing and must be fixed. Trading LESS is NOT a strategy: tightening an " +
-  "entry gate so there are fewer trades does not improve anything, and 'fewer " +
-  "candidates' is NOT 'better quality'. Every proposal must keep the arm " +
-  "participating and raise expectancy. " +
+  "Dice is a reference control, not the target: measure each bot against its " +
+  "own realised P&L, not against Dice. Trading LESS is NOT a strategy: " +
+  "tightening an entry gate so there are fewer trades does not improve " +
+  "anything, and 'fewer candidates' is NOT 'better quality'. Every proposal " +
+  "must keep the arm participating and raise its P&L. " +
   "You may change: a bot's written rubric, Laya's question sets, the numeric " +
   "strategy parameters, the runtime knobs, and a bot's STRATEGY TEMPLATE " +
-  "(`params.<bot>.strategy`, chosen from STRATEGY POOL). `maxCandidates` is " +
-  "OUT OF SCOPE - never propose it. Two jobs: (1) judge the bots against " +
-  "Laya's review of the hour and the per-arm scoreboard; (2) judge Laya " +
-  "itself. You are given Laya's review, the scoreboard, the STRATEGY DUE " +
+  "(`params.<bot>.strategy`, chosen from STRATEGY POOL) where that target is " +
+  "offered - some bots' templates are pinned by the owner. `maxCandidates` is " +
+  "OUT OF SCOPE - never propose it. Two jobs: (1) judge each bot on its own " +
+  "realised P&L and win/loss in Laya's review of the hour; (2) judge Laya " +
+  "itself. You are given Laya's review, the per-arm results, the STRATEGY DUE " +
   "flags, the allowed ranges, and the current value of each target. " +
-  "ROTATE A LOSER: if a bot is flagged STRATEGY DUE (it has not beaten Dice " +
-  "over its last 10 closed trades), replace its strategy with a DIFFERENT one " +
+  "ROTATE A LOSER: if a bot is flagged STRATEGY DUE (it has lost money over " +
+  "its last 10 closed trades), replace its strategy with a DIFFERENT one " +
   "from the pool instead of nudging the loser. Propose at most ONE change per " +
   "bot, up to two bots. For numeric targets (`params.*`, `runtime`, " +
   "`laya.analysisPolicy`) return a PATCH: only the keys you change, e.g. " +
@@ -499,8 +497,8 @@ const REVIEW_SYSTEM =
   "decision or probability, code controls size and execution, do not alter " +
   "stops, do not force trades. Capital, mode, leverage and disabling stops " +
   "are never changeable. To undo one of your own applied changes, propose " +
-  "{target, revert:true, rationale} when the ledger shows it is losing to " +
-  "Dice. If nothing is worth changing, return an empty proposals list. " +
+  "{target, revert:true, rationale} when the ledger shows it is losing money. " +
+  "If nothing is worth changing, return an empty proposals list. " +
   "Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
   '"proposals":[{"target":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
@@ -573,9 +571,10 @@ export class TradeReview {
     const trips = closedRoundTrips(orders);
     const out = {};
     for (const arm of STRATEGY_ARMS) {
-      const barMs = { "5m": 300000, "15m": 900000, "1h": 3600000 }[
-        this.effectiveParams(arm).timeframe
-      ] ?? 900000;
+      const barMs =
+        { "5m": 300000, "15m": 900000, "1h": 3600000 }[
+          this.effectiveParams(arm).timeframe
+        ] ?? 900000;
       const since = Date.now() - bars * barMs;
       const recent = (trips[arm] ?? []).filter((t) => t.closed >= since);
       const pnl = recent.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
@@ -593,7 +592,12 @@ export class TradeReview {
   paramView(id) {
     const eff = this.effectiveParams(id);
     return Object.fromEntries(
-      PARAM_KEYS.filter((k) => eff[k] !== undefined).map((k) => [k, eff[k]]),
+      PARAM_KEYS.filter(
+        (k) =>
+          eff[k] !== undefined &&
+          // A pinned bot's strategy template is fixed; never offered or rewritten.
+          !(k === "strategy" && PINNED_STRATEGY_BOTS.has(id)),
+      ).map((k) => [k, eff[k]]),
     );
   }
   runtimeView() {
@@ -795,7 +799,7 @@ export class TradeReview {
           JSON.stringify(this.appliedLedger(s.orders)) +
           "\n\nSTRATEGY POOL (values for params.<bot>.strategy)\n" +
           Object.keys(STRATEGY_POOL).join(", ") +
-          "\n\nSTRATEGY DUE (10 closed trades without beating Dice: replace the strategy)\n" +
+          "\n\nSTRATEGY DUE (10 closed trades and losing money: replace the strategy)\n" +
           JSON.stringify(this.strategyDue(s.orders)) +
           "\n\nRE-ENTRY CONTEXT (closes inside the reentryLookbackBars window)\n" +
           JSON.stringify(this.reentryStats(s.orders)) +
@@ -1006,8 +1010,8 @@ export class TradeReview {
     });
     return true;
   }
-  // Remember an applied change so its effect can be measured against Dice and
-  // reverted if it underperforms. Only arm-scoped targets are tracked.
+  // Remember an applied change so its effect can be measured on its own P&L and
+  // reverted if it loses money. Only arm-scoped targets are tracked.
   recordChange(proposal) {
     const arm =
       proposal.target.startsWith("params.") ||
@@ -1043,7 +1047,7 @@ export class TradeReview {
     );
   }
   // Per-arm result since its last strategy change, and whether it is due for a
-  // new strategy: 10 closed trades without beating Dice by P&L.
+  // new strategy: 10 closed trades and losing money (not a Dice comparison).
   strategyDue(orders) {
     const s = this.store.read();
     const since = s.strategySince ?? {};
@@ -1054,36 +1058,26 @@ export class TradeReview {
       const armTrips = (trips[arm] ?? []).filter(
         (t) => !from || t.closed >= from,
       );
-      const diceTrips = (trips[CONTROL_ARM] ?? []).filter(
-        (t) => !from || t.closed >= from,
-      );
       const pnl = armTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
-      const dicePnl = diceTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
       out[arm] = {
         trades: armTrips.length,
         wins: armTrips.filter((t) => t.pnl > 0n).length,
         losses: armTrips.filter((t) => t.pnl < 0n).length,
         pnl: Number(pnl.toFixed(2)),
-        dicePnl: Number(dicePnl.toFixed(2)),
-        due: armTrips.length >= 10 && pnl < dicePnl,
+        due: armTrips.length >= 10 && pnl < 0,
       };
     }
     return out;
   }
   // The loop's own track record: each applied change and its realised effect
-  // against Dice since it was applied. This is what the LLM judges to decide
-  // whether to keep, refine, or revert its own edits.
+  // since it was applied. The review judges whether to keep, refine, or revert.
   appliedLedger(orders) {
     const s = this.store.read();
     const changes = Array.isArray(s.appliedChanges) ? s.appliedChanges : [];
     const trips = closedRoundTrips(orders);
     return changes.map((c) => {
       const arm = (trips[c.arm] ?? []).filter((t) => t.closed >= c.appliedAt);
-      const dice = (trips[CONTROL_ARM] ?? []).filter(
-        (t) => t.closed >= c.appliedAt,
-      );
       const pnl = arm.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
-      const dicePnl = dice.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
       return {
         target: c.target,
         arm: c.arm,
@@ -1091,8 +1085,6 @@ export class TradeReview {
         trades: arm.length,
         wins: arm.filter((t) => t.pnl > 0n).length,
         pnl: Number(pnl.toFixed(2)),
-        dicePnl: Number(dicePnl.toFixed(2)),
-        delta: Number((pnl - dicePnl).toFixed(2)),
       };
     });
   }
@@ -1109,7 +1101,7 @@ export class TradeReview {
     );
   }
   // Auto-revert an applied change that has had time to prove itself and is
-  // losing to Dice. The safety bound is always Dice, not an arbitrary threshold.
+  // losing money (its own realised P&L since the change, not a Dice comparison).
   revertLosers(orders, now = Date.now()) {
     const s = this.store.read();
     const changes = Array.isArray(s.appliedChanges) ? s.appliedChanges : [];
@@ -1124,17 +1116,13 @@ export class TradeReview {
       const armTrips = (trips[c.arm] ?? []).filter(
         (t) => t.closed >= c.appliedAt,
       );
-      const diceTrips = (trips[CONTROL_ARM] ?? []).filter(
-        (t) => t.closed >= c.appliedAt,
-      );
       const pnl = armTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
-      const dice = diceTrips.reduce((n, t) => n + Number(t.pnl) / 1e18, 0);
-      if (armTrips.length >= 3 && pnl < dice - MIN_MARGIN) {
+      if (armTrips.length >= 3 && pnl < -MIN_MARGIN) {
         try {
           this.revert(c.target);
           this.store.event("change", {
             target: c.target,
-            message: `Auto-reverted ${c.target}: ${c.arm} P&L ${pnl.toFixed(2)} vs Dice ${dice.toFixed(2)}`,
+            message: `Auto-reverted ${c.target}: ${c.arm} P&L ${pnl.toFixed(2)} since the change`,
           });
         } catch {
           keep.push(c);

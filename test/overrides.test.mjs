@@ -140,3 +140,19 @@ test("strategy is a tunable enum of the pool", () => {
   );
   assert.match(validateParams("params.trend", { strategy: "nope" }), /one of/);
 });
+
+test("a pinned bot's strategy cannot be proposed", () => {
+  assert.match(
+    validateOverride("params.breakout", '{"strategy":"breakout_retest"}'),
+    /strategy is fixed/,
+  );
+  assert.match(
+    validateOverride("params.momentum", '{"strategy":"mean_reversion"}'),
+    /strategy is fixed/,
+  );
+  // trend is not pinned.
+  assert.equal(
+    validateOverride("params.trend", '{"strategy":"mean_reversion"}'),
+    null,
+  );
+});
