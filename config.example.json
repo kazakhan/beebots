@@ -50,7 +50,7 @@
       "stopPct": 4,
       "trailActivationPct": 6,
       "trailPct": 3,
-      "maxHoldHours": 0,
+      "maxHoldHours": 24,
       "maxSpreadBps": 30,
       "minPeriodTurnover": 100000,
       "min24hTurnover": 2000000,

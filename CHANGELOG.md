@@ -14,6 +14,20 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.6.2] - 2026-10-05 - Keeper gets the same time stop as the other arms
+
+### Changed
+
+- **Keeper's `maxHoldHours` 0 -> 24** in `config.example.json`, so its exits
+  fully match the other bots and Dice (percentage stop + trailing + a 24h time
+  stop). The live `/etc/beebots/config.json` is updated to match.
+
+### Verification
+
+- 306 Node tests still pass; the config schema is unchanged.
+
+---
+
 ## [3.6.1] - 2026-10-05 - Template timeframe is honoured end to end
 
 ### Fixed
