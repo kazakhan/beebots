@@ -49,7 +49,9 @@ import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
 import {
   defaults as STRATEGY_DEFAULTS,
-  STRATEGY_POOL,
+  STRATEGY_RULES,
+  getTemplates,
+  setTemplates,
 } from "./strategy-v2.mjs";
 import { selfTune } from "./self-tune.mjs";
 import { VARIANT_NAMES } from "./analysis-variants.mjs";
@@ -71,9 +73,10 @@ import {
 
 export { ALLOWED_TARGETS, targetAllowed };
 
-// Minimum closed round-trips before an EDGE change may be applied. Lowered for a
-// faster self-improvement loop; the review runs hourly.
-export const MIN_SAMPLE = 5;
+// Minimum closed round-trips before an EDGE change may be applied. Raised to 25
+// in 3.6.0: changes are now made once a day, so each one must rest on a real
+// sample rather than an hourly handful.
+export const MIN_SAMPLE = 25;
 // Relative expectancy improvement required over the control arm.
 export const MIN_MARGIN = 0.1;
 // Hours a proposal must hold in shadow before promotion.
@@ -490,9 +493,13 @@ const REVIEW_SYSTEM =
   "anything, and 'fewer candidates' is NOT 'better quality'. Every proposal " +
   "must keep the arm participating and raise its P&L. " +
   "You may change: a bot's written rubric, Laya's question sets, the numeric " +
-  "strategy parameters, the runtime knobs, and a bot's STRATEGY TEMPLATE " +
-  "(`params.<bot>.strategy`, chosen from STRATEGY POOL) where that target is " +
-  "offered - some bots' templates are pinned by the owner. `maxCandidates` is " +
+  "strategy parameters, the runtime knobs, a bot's STRATEGY TEMPLATE " +
+  "(`params.<bot>.strategy`, chosen from STRATEGY POOL), and the STRATEGY POOL " +
+  "itself (target `strategyPool`). The pool edit is " +
+  '{"target":"strategyPool","proposed":{"remove":["id"],"add":[{"id","label","rule","universe","timeframe","count"}]}} ' +
+  "- delete a template that is losing, or add a NEW one by combining a coded " +
+  "rule with a universe and timeframe (a template is always executable). " +
+  "`maxCandidates` is " +
   "OUT OF SCOPE - never propose it. Two jobs: (1) judge each bot on its own " +
   "realised P&L and win/loss in Laya's review of the hour; (2) judge Laya " +
   "itself. You are given Laya's review, the per-arm results, the STRATEGY DUE " +
@@ -698,8 +705,9 @@ export class TradeReview {
       keys
         .map((k) => {
           const r = schema[k];
-          return r.enum
-            ? `${k}: one of ${r.enum.join("|")}`
+          const en = typeof r.enum === "function" ? r.enum() : r.enum;
+          return en
+            ? `${k}: one of ${en.join("|")}`
             : r.list
               ? `${k}: any of ${r.list.join("|")}`
               : `${k}: ${r.min}..${r.max}${r.int ? " (int)" : ""}`;
@@ -762,6 +770,9 @@ export class TradeReview {
     timeframeLab = null,
     focusArm = null,
     focusStreak = 0,
+    apply = true,
+    daily = false,
+    hourly = [],
   }) {
     const events = this.store
       .recent(2000)
@@ -792,6 +803,38 @@ export class TradeReview {
     } catch (e) {
       laya = { error: e.message };
     }
+    // Hourly pass (3.6.0): collect Laya's read of the hour and store it. No LLM,
+    // no self-tune, no changes - the daily pass reasons over these records.
+    if (!apply) {
+      const record = {
+        since,
+        until,
+        hourly: true,
+        sample: closedTrades(s.orders),
+        layaPerf: perf,
+        laya: laya.error
+          ? { error: laya.error }
+          : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
+        error: laya.error ?? null,
+      };
+      this.store.change(
+        (st) => {
+          st.lastHourly = record;
+          st.hourlyReviews = [
+            ...(Array.isArray(st.hourlyReviews) ? st.hourlyReviews : []),
+            record,
+          ].slice(-48);
+        },
+        "review",
+        {
+          summary: "Hourly data collected",
+          proposals: 0,
+          applied: 0,
+          error: record.error,
+        },
+      );
+      return;
+    }
     let summary = null,
       observations = [],
       proposals = [],
@@ -820,10 +863,23 @@ export class TradeReview {
           JSON.stringify(laya.answers) +
           "\n\nSCOREBOARD\n" +
           scoreboardLines(s.orders).join("\n") +
+          (daily && hourly.length
+            ? "\n\nHOURLY DATA SINCE LAST APPLY (each hour's Laya read; this daily " +
+              "pass is the only one that changes anything)\n" +
+              JSON.stringify(
+                hourly
+                  .slice(-48)
+                  .map((h) => h?.laya?.answers ?? { error: h?.error ?? null }),
+              )
+            : "") +
           "\n\nAPPLIED CHANGES (your prior edits and their effect)\n" +
           JSON.stringify(this.appliedLedger(s.orders)) +
-          "\n\nSTRATEGY POOL (values for params.<bot>.strategy)\n" +
-          Object.keys(STRATEGY_POOL).join(", ") +
+          "\n\nSTRATEGY POOL (values for params.<bot>.strategy; delete a losing " +
+          "template or add one by combining a coded rule + universe + timeframe)\n" +
+          Object.keys(getTemplates()).join(", ") +
+          "\nCODED RULES: " +
+          Object.keys(STRATEGY_RULES).join(", ") +
+          " | UNIVERSES: all, top100, top20 | TIMEFRAMES: 5m, 15m, 1h" +
           "\n\nSTRATEGY DUE (10 closed trades and losing money: replace the strategy)\n" +
           JSON.stringify(this.strategyDue(s.orders)) +
           (focusArm
@@ -910,6 +966,28 @@ export class TradeReview {
     }
     const sample = closedTrades(s.orders);
     const reviewed = proposals.map((p) => {
+      // A pool edit (delete a losing template / add a new combination) is a
+      // structural change: no sample gate, but it is validated hard and only the
+      // daily pass reaches here.
+      if (p?.target === "strategyPool") {
+        const reasons = [];
+        const err = this.poolError(p.proposed);
+        if (err) reasons.push(err);
+        let applied = false;
+        if (!err && autoApply) {
+          try {
+            this.applyPool(p.proposed);
+            applied = true;
+          } catch (e) {
+            reasons.push(e.message);
+          }
+        }
+        return {
+          ...p,
+          gate: { ok: reasons.length === 0, reasons, tier: "structural" },
+          applied,
+        };
+      }
       const isRevert = p?.revert === true;
       // A revert restores a prior known value, so it is not sample-gated; it
       // only has to name an allowed target.
@@ -975,6 +1053,7 @@ export class TradeReview {
       strategyDue: this.strategyDue(s.orders),
       reentry: this.reentryStats(s.orders),
       focus: focusArm ? { arm: focusArm, streak: focusStreak } : null,
+      daily,
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
@@ -994,6 +1073,9 @@ export class TradeReview {
         } else {
           st.lastReview = record;
           st.lastReviewError = null;
+          // Anchor the next daily window. Only the scheduled daily pass (and the
+          // startup catch-up) moves it; a focused streak review does not.
+          if (daily) st.lastApplyReviewAt = until;
         }
       },
       "review",
@@ -1005,6 +1087,55 @@ export class TradeReview {
       },
     );
     return record;
+  }
+  // Validate a `strategyPool` edit without side effects. Templates can only be
+  // recombinations of the coded rules, so every template stays executable.
+  poolError(proposed) {
+    if (!proposed || typeof proposed !== "object")
+      return "Pool change must be an object";
+    const remove = Array.isArray(proposed.remove) ? proposed.remove : [];
+    const add = Array.isArray(proposed.add) ? proposed.add : [];
+    if (!remove.length && !add.length) return "Pool change is empty";
+    const current = getTemplates();
+    for (const id of remove)
+      if (!current[id]) return `Cannot remove unknown template ${id}`;
+    const remaining = Object.keys(current).filter((id) => !remove.includes(id));
+    if (!remaining.length) return "Cannot remove every template";
+    for (const t of add) {
+      if (!t || typeof t.id !== "string" || !t.id)
+        return "New template needs an id";
+      if (!STRATEGY_RULES[t.rule]) return `Unknown rule ${t.rule}`;
+      if (!["all", "top100", "top20"].includes(t.universe))
+        return `Unknown universe ${t.universe}`;
+      if (!["5m", "15m", "1h"].includes(t.timeframe))
+        return `Unknown timeframe ${t.timeframe}`;
+    }
+    return null;
+  }
+  // Apply a validated pool edit: delete templates, add recombination templates,
+  // persist the pool in state and make it live for evaluate()/the collector.
+  applyPool(proposed) {
+    const err = this.poolError(proposed);
+    if (err) throw Error(err);
+    const current = { ...getTemplates() };
+    for (const id of proposed.remove ?? []) delete current[id];
+    for (const t of proposed.add ?? [])
+      current[t.id] = {
+        label:
+          typeof t.label === "string" && t.label ? t.label.slice(0, 80) : t.id,
+        rule: t.rule,
+        universe: t.universe,
+        timeframe: t.timeframe,
+        count: Math.min(10, Math.max(1, Number(t.count) || 3)),
+      };
+    this.store.change(
+      (st) => {
+        st.strategyPool = current;
+      },
+      "change",
+      { message: `Strategy pool updated: ${Object.keys(current).join(", ")}` },
+    );
+    setTemplates(current);
   }
   // Apply a proposal that already passed the gate. One file at a time, backed
   // up, written atomically, and recorded as an audit event.

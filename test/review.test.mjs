@@ -27,6 +27,7 @@ import {
   losingStreaks,
 } from "../src/review.mjs";
 import { validateOverride, overridePath } from "../src/overrides.mjs";
+import { getTemplates, setTemplates } from "../src/strategy-v2.mjs";
 import { defaultAnalysisQuestions } from "../src/laya.mjs";
 
 const SAFE_RUBRIC =
@@ -140,7 +141,7 @@ test("structural changes are ungated; edge changes need the arm and a control", 
 
   const strict = evaluateGate({
     proposal: edge,
-    sample: { breakout: 10, trend: 10, momentum: 10, control: 0 },
+    sample: { breakout: 30, trend: 30, momentum: 30, control: 0 },
     requireControl: true,
   });
   assert.equal(strict.ok, false);
@@ -148,7 +149,7 @@ test("structural changes are ungated; edge changes need the arm and a control", 
 
   const ok = evaluateGate({
     proposal: edge,
-    sample: { breakout: 10, trend: 10, momentum: 10, control: 10 },
+    sample: { breakout: 30, trend: 30, momentum: 30, control: 30 },
   });
   assert.equal(ok.ok, true, JSON.stringify(ok.reasons));
   assert.equal(ok.tier, "edge");
@@ -993,12 +994,9 @@ test("every bot's strategy is offered to the review", () => {
       config: {},
       dataDir: dir,
     });
-    assert.equal(
-      reviewer.paramView("breakout").strategy,
-      "momentum_rotation_fast",
-    );
-    assert.equal(reviewer.paramView("momentum").strategy, "momentum_leaders");
-    assert.equal(reviewer.paramView("trend").strategy, "trend_pullback");
+    assert.equal(reviewer.paramView("breakout").strategy, "orakelia");
+    assert.equal(reviewer.paramView("momentum").strategy, "hexchaser");
+    assert.equal(reviewer.paramView("trend").strategy, "market_mover");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -1107,6 +1105,83 @@ test("a focused review refuses proposals for other bots", async () => {
       "the other bot's proposal is refused",
     );
   } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an hourly pass stores Laya's read and applies nothing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-hourly-"));
+  const store = new Store(":memory:", config());
+  try {
+    let modelCalls = 0;
+    const reviewer = new TradeReview({
+      store,
+      laya: { ask: async () => ({ answers: { missed: {} }, elapsed_s: 0.1 }) },
+      model: {
+        review: async () => {
+          modelCalls++;
+          return { data: { proposals: [] } };
+        },
+      },
+      config: { review: { autoApply: true } },
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    await reviewer.run({ since: 0, until: 3600000, apply: false });
+    assert.equal(modelCalls, 0, "no LLM on the hourly data pass");
+    const s = store.read();
+    assert.ok(s.lastHourly, "the hourly record is stored");
+    assert.equal(s.lastReview, undefined, "the daily record is untouched");
+    assert.equal((s.hourlyReviews ?? []).length, 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the daily review can delete and create strategy templates", () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-pool-"));
+  const store = new Store(":memory:", config());
+  const original = { ...getTemplates() };
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: {},
+      model: {},
+      config: {},
+      dataDir: dir,
+    });
+    assert.match(
+      reviewer.poolError({
+        remove: [],
+        add: [{ id: "x", rule: "nope", universe: "all", timeframe: "5m" }],
+      }),
+      /Unknown rule/,
+    );
+    assert.match(
+      reviewer.poolError({ remove: Object.keys(getTemplates()), add: [] }),
+      /every template/,
+    );
+    reviewer.applyPool({
+      remove: ["trend_pullback"],
+      add: [
+        {
+          id: "hex5",
+          label: "Hexchaser 5m top20",
+          rule: "hexchaser",
+          universe: "top20",
+          timeframe: "5m",
+        },
+      ],
+    });
+    const pool = getTemplates();
+    assert.ok(!pool.trend_pullback, "the deleted template is gone");
+    assert.equal(pool.hex5.rule, "hexchaser");
+    assert.equal(pool.hex5.universe, "top20");
+    assert.ok(store.read().strategyPool.hex5, "the pool is persisted in state");
+  } finally {
+    setTemplates(original);
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }

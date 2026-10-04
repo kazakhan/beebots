@@ -8,7 +8,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { isVariant, VARIANT_NAMES } from "./analysis-variants.mjs";
-import { STRATEGY_POOL } from "./strategy-v2.mjs";
+import { getTemplates } from "./strategy-v2.mjs";
 
 export const OVERRIDES = {
   "laya.reviewQuestions": "laya-review-questions.json",
@@ -31,7 +31,9 @@ export const ALLOWED_TARGETS = Object.keys(OVERRIDES);
 // leverage, maxPositions and turning stops off are deliberately absent - they
 // are not tunable.
 export const PARAM_SCHEMA = {
-  strategy: { enum: Object.keys(STRATEGY_POOL) },
+  // The live template pool, which the daily review maintains. A function so a
+  // review-created template is immediately assignable and a deleted one is not.
+  strategy: { enum: () => Object.keys(getTemplates()) },
   rangeBars: { min: 5, max: 200, int: true },
   rangeAtr: { min: 0.5, max: 20 },
   relativeVolume: { min: 0.5, max: 10 },
@@ -90,10 +92,12 @@ export const RUNTIME_KEYS = Object.keys(RUNTIME_SCHEMA).filter(
 );
 
 function boundError(key, value, rule) {
-  if (rule.enum)
-    return rule.enum.includes(value)
+  if (rule.enum) {
+    const allowed = typeof rule.enum === "function" ? rule.enum() : rule.enum;
+    return allowed.includes(value)
       ? null
-      : `${key} must be one of ${rule.enum.join(", ")}`;
+      : `${key} must be one of ${allowed.join(", ")}`;
+  }
   if (rule.list) {
     if (!Array.isArray(value) || !value.length)
       return `${key} must be a non-empty list`;

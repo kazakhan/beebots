@@ -232,11 +232,15 @@ simulated at the touch with the real taker fee and booked through the same ledge
 path, never touching the exchange. Setting `"paper": false` and funding its
 ledger switches it to real funds.
 
-An **hourly Trade Review** runs at `:00`. It sends the previous hour to Laya as
-text; Laya answers five classified heads; the decision model turns those into at
-most three proposals that change a bot's rubric **or Laya's own question sets**
-— the review judges Laya as well as the bots, using a table of Laya's label
-distribution and the win rate / P&L its pre-entry `fit` tracked.
+The **Trade Review** runs on two cadences. **Hourly at `:00`** it collects data
+only: Laya reads the hour and the record is stored, with no LLM and no changes.
+**Daily at 06:00 local** the decision model reviews the accumulated day and is
+the only pass that applies changes: at most three proposals that adjust a bot's
+numeric strategy, a bot's rubric, **Laya's own question sets**, or the
+**strategy pool** (delete a losing template / add a new combination of a coded
+rule + universe + timeframe). The review judges Laya as well as the bots, using
+a table of Laya's label distribution and the win rate / P&L its pre-entry `fit`
+tracked.
 
 A proposal is applied only when it stays in scope (prose only — never risk
 numbers, capital, mode or code), is a **complete validated document** (a rubric
@@ -246,8 +250,7 @@ heads), and passes the evidence gate:
 - `laya.reviewQuestions` (the review's own questions) is **structural** and
   ungated — it cannot affect trading.
 - `rubric.*` and `laya.analysisQuestions` are **edge** changes: they need
-  `review.minSample` (**10**) closed trades on the target arm, plus a control
-  baseline of the same size.
+  `review.minSample` (**25** since 3.6.0) closed trades on the target arm.
 
 Applied changes are files under `/var/lib/beebots/overrides/`, feed `ruleHash`,
 and can be reverted individually. `review.minSample` and `review.autoApply` are

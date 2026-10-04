@@ -17,8 +17,11 @@ import {
   VERSION,
   defaults as STRATEGY_DEFAULTS,
   DEFAULT_STRATEGY,
+  TEMPLATE_DEFAULTS,
+  resolveTemplate,
   entryRejection,
   entryEligible,
+  setTemplates,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
 import { buildTimeframeLab } from "./timeframe-lab.mjs";
@@ -40,7 +43,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.5.4";
+const BUILD = "3.6.0";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -122,6 +125,9 @@ export class Engine {
     });
     this.stopped = false;
     this.busy = false;
+    // Load any review-created strategy templates from state, so the pool the
+    // daily review maintains is the one evaluate()/the collector resolve.
+    setTemplates(this.store.read().strategyPool);
     this.protectBusy = false;
     this.lastCycle = 0;
     this.lastProtection = 0;
@@ -200,11 +206,20 @@ export class Engine {
   // override is schema-validated before use, so a corrupt or out-of-bounds file
   // is ignored rather than trusted.
   effectiveRules(id) {
+    const over = readJsonOverride(this.config.dataDir, `params.${id}`, null);
+    const strat =
+      over?.strategy ??
+      this.config.bots?.[id]?.strategy ??
+      STRATEGY_DEFAULTS[id]?.strategy;
+    const template = resolveTemplate(strat);
     const base = {
       ...(STRATEGY_DEFAULTS[id] ?? {}),
+      // Template defaults refine the keys the chosen rule reads (notably
+      // minSignalBars for a different timeframe); the bot's own defaults are the
+      // base so a template can run on any bot.
+      ...(template ? (TEMPLATE_DEFAULTS[template.rule] ?? {}) : {}),
       ...(this.config.bots?.[id] ?? {}),
     };
-    const over = readJsonOverride(this.config.dataDir, `params.${id}`, null);
     if (over && !validateParams(`params.${id}`, over))
       Object.assign(base, over);
     // Fixed structural cap: the review must never change it. Pin it even if a
@@ -457,16 +472,23 @@ export class Engine {
     void this.cycle();
     void this.protect();
   }
-  // The Trade Review runs on the wall clock, at :00 each hour, over the hour
-  // that just closed. A plain interval would drift and split hours unevenly.
+  // The Trade Review has two cadences (3.6.0):
+  //   hourly, at wall-clock :00 - Laya reads the hour and the result is STORED
+  //     (no LLM, no changes). It is the data the daily pass reasons over.
+  //   daily, at 06:00 local - the LLM reviews the accumulated day and applies
+  //     changes. This is the only time a strategy or parameter can change.
+  // A plain interval would drift, so the hourly pass is anchored to the hour.
   scheduleReview() {
     if (!this.reviewer || this.config.review?.enabled === false) return;
     const now = Date.now();
     const next = Math.ceil(now / 3600000) * 3600000;
     const first = setTimeout(
       () => {
-        void this.review();
-        const iv = setInterval(() => void this.review(), 3600000);
+        void this.review(false, null, 0, { apply: false });
+        const iv = setInterval(
+          () => void this.review(false, null, 0, { apply: false }),
+          3600000,
+        );
         iv.unref?.();
         this.timers.push(iv);
       },
@@ -474,18 +496,53 @@ export class Engine {
     );
     first.unref?.();
     this.timers.push(first);
-    // Review the hour that just closed on startup, rather than waiting for the
-    // next wall-clock :00. review() is idempotent for an already-reviewed hour.
-    void this.review();
+    this.scheduleDailyApply();
+    // On startup, apply the daily pass if one is due (>24h since the last);
+    // otherwise collect the last closed hour as data.
+    void this.startupReview();
   }
-  async review(force = false, focusArm = null, focusStreak = 0) {
+  // 06:00 local, every day. Rescheduled after each run so a DST shift cannot
+  // walk the anchor away from the wall clock.
+  scheduleDailyApply() {
+    if (!this.reviewer || this.config.review?.enabled === false) return;
+    const now = Date.now();
+    const d = new Date(now);
+    d.setHours(6, 0, 0, 0);
+    if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+    const t = setTimeout(
+      () => {
+        void this.review(false, null, 0, { apply: true, daily: true });
+        this.scheduleDailyApply();
+      },
+      Math.max(1000, d.getTime() - now + 1500),
+    );
+    t.unref?.();
+    this.timers.push(t);
+  }
+  async startupReview() {
+    const s = this.store.read();
+    const last = Number(s.lastApplyReviewAt) || 0;
+    if (Date.now() - last > 86400000)
+      await this.review(false, null, 0, { apply: true, daily: true });
+    else await this.review(false, null, 0, { apply: false });
+  }
+  async review(
+    force = false,
+    focusArm = null,
+    focusStreak = 0,
+    { apply = true, daily = false } = {},
+  ) {
     if (this.reviewing || this.stopped) return;
     const until = Math.floor(Date.now() / 3600000) * 3600000;
-    const since = until - 3600000;
+    const s = this.store.read();
+    let since = until - 3600000;
+    if (daily) since = Number(s.lastApplyReviewAt) || until - 86400000;
     if (!force) {
-      const s = this.store.read();
-      // Already reviewed this hour successfully; a failed hour is retried.
-      if (s.lastReview?.until === until && !s.lastReviewError) return;
+      // Hourly data and the daily apply are guarded separately so the hourly
+      // pass can never suppress the daily one.
+      if (apply) {
+        if (s.lastReview?.until === until && !s.lastReviewError) return;
+      } else if (s.lastHourly?.until === until) return;
     }
     this.reviewing = true;
     try {
@@ -497,6 +554,9 @@ export class Engine {
         timeframeLab: this.timeframeLab(),
         focusArm,
         focusStreak,
+        apply,
+        daily,
+        hourly: Array.isArray(s.hourlyReviews) ? s.hourlyReviews : [],
       });
       this.setError("review", null);
     } catch (e) {
@@ -1529,9 +1589,11 @@ export class Engine {
       reserve,
       reason,
       ...rules,
-      policy: policy
-        ? { ...policy, bot: id, trailAtr: rules.trailAtr, trailR: rules.trailR }
-        : null,
+      // Every bot now exits on the shared percentage stop / trailing / max-hold
+      // path (3.6.0). The sizing plan is still computed above, but no strategy
+      // policy is attached, so the decider cannot churn and every arm exits
+      // identically to Dice.
+      policy: null,
     });
     try {
       // A paper arm never touches the exchange. Its fill is simulated at the

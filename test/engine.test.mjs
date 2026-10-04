@@ -397,7 +397,7 @@ test("effectiveRules honours a stored strategy override", () => {
   mkdirSync(join(dir, "overrides"), { recursive: true });
   writeFileSync(
     join(dir, "overrides", "params-breakout.json"),
-    JSON.stringify({ strategy: "breakout_retest", riskPct: 1.2 }),
+    JSON.stringify({ strategy: "orakelia", riskPct: 1.2 }),
   );
   const store = new Store(":memory:", c);
   try {
@@ -410,9 +410,9 @@ test("effectiveRules honours a stored strategy override", () => {
       model: {},
     });
     const b = engine.effectiveRules("breakout");
-    assert.equal(b.strategy, "breakout_retest", "the override applies");
+    assert.equal(b.strategy, "orakelia", "the override applies");
     assert.equal(b.riskPct, 1.2, "other params still apply");
-    assert.equal(engine.effectiveRules("trend").strategy, "trend_pullback");
+    assert.equal(engine.effectiveRules("trend").strategy, "market_mover");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

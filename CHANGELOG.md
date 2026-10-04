@@ -14,6 +14,55 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.6.0] - 2026-10-05 - Three winning strategies, one exit path, daily review
+
+### Added
+
+- **The three top-performing templates from the original beebots.** The pool is
+  now `hexchaser`, `orakelia`, `market_mover` and `trend_pullback`.
+  - **Hexchaser** (`momentum`/Spark): long the strongest 7-day momentum coins,
+    ranked by the collector.
+  - **Orakelia** (`breakout`/Scout): the strongest 7-day momentum, but only while
+    price **and** volume are rising (`relativeVolume > 1`).
+  - **Market Mover** (`trend`/Keeper): accumulate the largest top-20 coins by
+    market cap and hold; the collector restricts its universe to the top 20.
+  - Removed from the pool: `momentum_leaders`, `momentum_rotation_fast`,
+    `mean_reversion`, `breakout_retest`, `volatility_compression`,
+    `range_mean_return`.
+- **A dynamic strategy pool.** The daily review may delete a losing template and
+  create a new one by combining a coded rule with a universe (`all`/`top100`/
+  `top20`) and a timeframe (`5m`/`15m`/`1h`) via the `strategyPool` target
+  (`{"remove":[...],"add":[...]}`). Templates are always executable - a new one
+  can only recombine coded rules. The pool is persisted in state and loaded at
+  startup.
+
+### Changed
+
+- **The review now runs twice, with different power.** Hourly at wall-clock `:00`
+  it collects data only: Laya reads the hour and the record is stored in
+  `hourlyReviews` (rolling, 48) with **no LLM and no changes**. Daily at **06:00
+  local** (and on startup if >24h since the last) the LLM reviews the whole day
+  and **applies** changes. The daily pass is the only place a strategy or
+  parameter can change.
+- **`MIN_SAMPLE` 5 -> 25.** A day's changes must rest on a real sample.
+- **Every bot now shares Dice's exit path.** A strategy BUY attaches no exit
+  policy: exits are the percentage protective stop (`stopPct`), the trailing
+  stop (`trailActivationPct`/`trailPct`) and `maxHoldHours`. The rule-based
+  strategy exits ("Trend invalidated", "Breakout failed", "Relative momentum
+  deteriorated") are gone. `executionPlan` sizes against `stopPct` (size =
+  `riskPct / stopPct`), so each position is ~25-33% of capital and a bot fills
+  its 3 slots.
+- **No discretionary SELL anywhere.** `buildMenu` offers HOLD only for a held
+  coin; the decider can no longer churn a position.
+
+### Verification
+
+- 306 Node tests pass, up from 300: the three new rule branches, volume
+  gating, `setTemplates` pruning, the hourly data-only pass, and the
+  delete/create pool edit.
+
+---
+
 ## [3.5.4] - 2026-10-04 - A 5-loss streak triggers an immediate focused review
 
 ### Added

@@ -9,6 +9,7 @@ import {
   rankMomentum,
   aggregate,
   DEFAULT_STRATEGY,
+  resolveTemplate,
 } from "./strategy-v2.mjs";
 import { fromTrades } from "./repair-candles.mjs";
 
@@ -71,6 +72,11 @@ export class UniverseMarket extends Market {
   // baseline rather than a uniform pick over the whole long tail.
   controlPool() {
     return this.marketCap.size ? this.marketCap : null;
+  }
+  // The first `n` symbols of the market-cap list, in cap order. The saved list
+  // is inserted in the provider's market-cap-descending order.
+  topUniverse(n) {
+    return new Set([...this.marketCap].slice(0, n));
   }
   async marketCapRefresh() {
     if (Date.now() - this.marketCapAt < 86400000) return;
@@ -348,15 +354,21 @@ export class UniverseMarket extends Market {
   snapshot(id) {
     if (!id) return super.snapshot();
     const rules = this.rulesFor?.(id) ?? this.config.bots[id] ?? {};
-    const strat = rules.strategy ?? DEFAULT_STRATEGY[id];
-    // Momentum-leaders draws from the top-N market cap, like Dice; the other
-    // templates scan every eligible market.
+    const template = resolveTemplate(rules.strategy ?? DEFAULT_STRATEGY[id]);
+    const rule = template?.rule ?? rules.strategy ?? DEFAULT_STRATEGY[id];
+    const universe = template?.universe ?? "all";
+    // The template's universe: top-20 / top-100 by market cap, or every eligible
+    // market. `topFraction` on the ranking is applied later for legacy rules.
     const list =
-      strat === "momentum_leaders" && this.marketCap?.size
+      universe === "top20" && this.marketCap?.size
         ? this.products.filter((p) =>
-            this.marketCap.has(String(p).split("-")[0].toUpperCase()),
+            this.topUniverse(20).has(String(p).split("-")[0].toUpperCase()),
           )
-        : this.products;
+        : universe === "top100" && this.marketCap?.size
+          ? this.products.filter((p) =>
+              this.marketCap.has(String(p).split("-")[0].toUpperCase()),
+            )
+          : this.products;
     const rows = [];
     let warming = 0,
       rejected = 0,
@@ -404,19 +416,25 @@ export class UniverseMarket extends Market {
       lastError,
       markets: this.products.length,
     };
-    // Rank by the template's horizon: the rotation templates keep the top-3
-    // leaders eligible; the legacy continuation keeps the top fraction.
-    if (strat === "momentum_leaders")
+    // Rank by the rule's horizon: the momentum leaders keep the top-K eligible;
+    // the legacy continuation keeps the top fraction. Market Mover takes the
+    // whole top-20 universe with no further ranking.
+    const count = Number(template?.count) || 3;
+    if (rule === "hexchaser")
+      return rankMomentum(rows, rules, { count, keys: ["momentum7dPct"] });
+    if (rule === "orakelia")
+      return rankMomentum(rows, rules, { count, keys: ["momentum7dPct"] });
+    if (rule === "momentum_leaders")
       return rankMomentum(rows, rules, {
-        count: 3,
+        count,
         keys: ["momentum24hPct", "momentum7dPct"],
       });
-    if (strat === "momentum_rotation_fast")
+    if (rule === "momentum_rotation_fast")
       return rankMomentum(rows, rules, {
-        count: 3,
+        count,
         keys: ["return4hPct", "momentum24hPct"],
       });
-    if (strat === "momentum_continuation") return rankMomentum(rows, rules);
+    if (rule === "momentum_continuation") return rankMomentum(rows, rules);
     return rows;
   }
   coverage() {

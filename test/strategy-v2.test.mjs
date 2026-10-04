@@ -12,6 +12,9 @@ import {
   entryEligible,
   entryRejection,
   executionPlan,
+  getTemplates,
+  setTemplates,
+  resolveTemplate,
 } from "../src/strategy-v2.mjs";
 import { migrateConfig } from "../src/migrate-v2.mjs";
 import { validate } from "../src/config.mjs";
@@ -118,9 +121,11 @@ test("v2 pipeline risk-sizes independent candidates and persists interval dedupl
   await e.cycle();
   assert.equal(submitted.length, 3);
   assert.equal(calls, 3);
-  assert.ok(submitted.every((o) => Number(o.size) < 20));
+  // Each entry is risk-sized: notional ~= riskBudget / stopPct * ask.
+  assert.ok(submitted.every((o) => Number(o.size) < 40));
   assert.ok(
-    Object.values(s.read().orders).every((o) => o.policy.version === "2.0.0"),
+    Object.values(s.read().orders).every((o) => o.policy == null),
+    "no strategy exit policy is attached (percentage exits only)",
   );
   // Reopening the same signal after a rejection must not issue duplicate assessments.
   for (const o of Object.values(s.read().orders)) s.reject(o.id);
@@ -993,9 +998,9 @@ test("a bot runs the strategy template it is assigned", () => {
 });
 
 test("defaults carry a strategy template for every bot", () => {
-  assert.equal(defaults.breakout.strategy, "momentum_rotation_fast");
-  assert.equal(defaults.trend.strategy, "trend_pullback");
-  assert.equal(defaults.momentum.strategy, "momentum_leaders");
+  assert.equal(defaults.breakout.strategy, "orakelia");
+  assert.equal(defaults.trend.strategy, "market_mover");
+  assert.equal(defaults.momentum.strategy, "hexchaser");
 });
 
 test("the rotation ranking keeps only the top-3 leaders", () => {
@@ -1064,4 +1069,66 @@ test("the channel rule only applies when a channel is present", () => {
     entryRejection("breakout", { ...base, channelHigh: 99 }),
     /channel/,
   );
+});
+
+test("hexchaser buys the strongest 7-day momentum", () => {
+  const f = evaluate(
+    "momentum",
+    { five: scoutFrame().five, hour: risingHour(), four: [] },
+    { strategy: "hexchaser" },
+    meme,
+  );
+  assert.equal(f.setupEligible, true);
+  assert.ok(f.momentum7dPct > 0);
+  assert.equal(f.rotation, true);
+});
+
+test("orakelia requires volume to be rising", () => {
+  const flat = evaluate(
+    "breakout",
+    { five: scoutFrame().five, hour: risingHour(), four: [] },
+    { strategy: "orakelia" },
+    meme,
+  );
+  assert.equal(flat.setupEligible, false);
+  assert.ok(flat.reasons.includes("Volume not rising"));
+  const hour = risingHour();
+  hour[hour.length - 1].volume = 5;
+  const f = evaluate(
+    "breakout",
+    { five: scoutFrame().five, hour, four: [] },
+    { strategy: "orakelia" },
+    meme,
+  );
+  assert.equal(f.setupEligible, true);
+});
+
+test("market_mover accumulates while above the hourly EMA50", () => {
+  const f = evaluate(
+    "trend",
+    { five: scoutFrame().five, hour: risingHour(), four: [] },
+    { strategy: "market_mover" },
+    meme,
+  );
+  assert.equal(f.setupEligible, true);
+});
+
+test("setTemplates makes a created template live and prunes the listing", () => {
+  const original = { ...getTemplates() };
+  try {
+    setTemplates({
+      hex5: {
+        label: "H",
+        rule: "hexchaser",
+        universe: "top20",
+        timeframe: "5m",
+      },
+    });
+    assert.equal(resolveTemplate("hex5").rule, "hexchaser");
+    assert.deepEqual(Object.keys(getTemplates()), ["hex5"]);
+    // A deleted built-in still resolves, so a bot running it keeps trading.
+    assert.ok(resolveTemplate("orakelia"));
+  } finally {
+    setTemplates(original);
+  }
 });

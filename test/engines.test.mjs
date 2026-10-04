@@ -60,20 +60,20 @@ test("the menu offers a buy per fresh product and sell/hold per held one", () =>
   assert.equal(parseMove("BUY BTC-USDC").action, "BUY");
 });
 
-test("a held product yields SELL and HOLD and is never a BUY", () => {
+test("a held product yields HOLD and is never a BUY or discretionary SELL", () => {
   const menu = buildMenu({
     candidates: [{ product: "BTC-USDC", held: true }, { product: "ETH-USDC" }],
     positions: [{ product: "BTC-USDC" }],
     maxPositions: 3,
   });
-  assert.ok(Object.hasOwn(menu, "SELL BTC-USDC"));
+  assert.ok(!Object.hasOwn(menu, "SELL BTC-USDC"));
   assert.ok(Object.hasOwn(menu, "HOLD BTC-USDC"));
   assert.ok(!Object.hasOwn(menu, "BUY BTC-USDC"));
   assert.ok(Object.hasOwn(menu, "BUY ETH-USDC"));
   assert.ok(Object.hasOwn(menu, "SKIP"));
 });
 
-test("at the position limit only SKIP, SELL and HOLD remain", () => {
+test("at the position limit only SKIP and HOLD remain", () => {
   const menu = buildMenu({
     candidates: [
       { product: "BTC-USDC", held: true },
@@ -83,9 +83,10 @@ test("at the position limit only SKIP, SELL and HOLD remain", () => {
     positions: [{ product: "BTC-USDC" }, { product: "ETH-USDC" }],
     maxPositions: 2,
   });
-  assert.ok(Object.hasOwn(menu, "SELL BTC-USDC"));
-  assert.ok(Object.hasOwn(menu, "SELL ETH-USDC"));
+  assert.ok(!Object.hasOwn(menu, "SELL BTC-USDC"));
+  assert.ok(!Object.hasOwn(menu, "SELL ETH-USDC"));
   assert.ok(!Object.hasOwn(menu, "BUY SOL-USDC"));
+  assert.ok(Object.hasOwn(menu, "HOLD BTC-USDC"));
   assert.ok(Object.hasOwn(menu, "SKIP"));
 });
 
@@ -183,12 +184,12 @@ test("the menu notes a recently closed product on the BUY option", () => {
   assert.equal(plain["BUY AAA-USDC"], "Enter a new long AAA-USDC position");
 });
 
-test("a rotation strategy is offered HOLD only for a held coin", () => {
+test("no strategy is offered a discretionary SELL for a held coin", () => {
   const held = { product: "AAA-USDC", held: true, setupEligible: false };
   const positions = [{ product: "AAA-USDC" }];
   const rot = buildMenu({
     id: "momentum",
-    strategy: "momentum_leaders",
+    strategy: "hexchaser",
     candidates: [held],
     positions,
     maxPositions: 3,
@@ -202,6 +203,6 @@ test("a rotation strategy is offered HOLD only for a held coin", () => {
     positions,
     maxPositions: 3,
   });
-  assert.ok(Object.hasOwn(normal, "SELL AAA-USDC"));
+  assert.ok(!Object.hasOwn(normal, "SELL AAA-USDC"));
   assert.ok(Object.hasOwn(normal, "HOLD AAA-USDC"));
 });

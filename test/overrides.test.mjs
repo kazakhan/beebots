@@ -134,24 +134,21 @@ test("maxCandidates is fixed: out of the tunables and refused as a proposal", ()
 
 test("strategy is a tunable enum of the pool", () => {
   assert.ok(PARAM_KEYS.includes("strategy"));
-  assert.equal(
-    validateParams("params.trend", { strategy: "mean_reversion" }),
-    null,
-  );
+  assert.equal(validateParams("params.trend", { strategy: "orakelia" }), null);
   assert.match(validateParams("params.trend", { strategy: "nope" }), /one of/);
 });
 
 test("any bot's strategy can be proposed (none pinned)", () => {
   assert.equal(
-    validateOverride("params.breakout", '{"strategy":"breakout_retest"}'),
+    validateOverride("params.breakout", '{"strategy":"orakelia"}'),
     null,
   );
   assert.equal(
-    validateOverride("params.momentum", '{"strategy":"mean_reversion"}'),
+    validateOverride("params.momentum", '{"strategy":"hexchaser"}'),
     null,
   );
   assert.equal(
-    validateOverride("params.trend", '{"strategy":"mean_reversion"}'),
+    validateOverride("params.trend", '{"strategy":"market_mover"}'),
     null,
   );
 });

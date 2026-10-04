@@ -12,7 +12,7 @@
 // score; code maps that answer to an action. The LLM path keeps its JSON
 // contract. One catalogue here means the runtime, the settings file and the
 // dashboard agree on the same list and on which components each engine uses.
-import { entryEligible, isRotationStrategy } from "./strategy-v2.mjs";
+import { entryEligible } from "./strategy-v2.mjs";
 
 export const ENGINES = {
   jev: {
@@ -104,15 +104,13 @@ export function buildMenu({
 }) {
   const held = new Set(positions.map((p) => p.product));
   const room = positions.length < Number(maxPositions || 1);
-  // A rotation template manages every exit in code (stop / trailing), so the
-  // holder is offered HOLD only - no discretionary SELL to churn the position.
-  const discretionarySell = !isRotationStrategy(strategy);
+  // Every strategy manages its own exit in code (percentage stop / trailing /
+  // max hold), so the decider is never offered a discretionary SELL - it can
+  // only HOLD a position and let the risk layer close it.
   const menu = {};
   for (const c of candidates) {
     if (!c || typeof c.product !== "string" || !c.product) continue;
     if (held.has(c.product)) {
-      if (discretionarySell)
-        menu[`SELL ${c.product}`] = `Close the ${c.product} position now`;
       menu[`HOLD ${c.product}`] = `Keep the ${c.product} position open`;
     } else if (
       room &&

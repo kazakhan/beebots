@@ -22,22 +22,18 @@ compare against it or to "beat" it.
 - **The LLM** — an optional provider-backed model (selected in the dashboard).
   It can make the trading decision, and/or review the review. It never places
   orders itself; code controls size and execution.
-- **Three strategy bots**, each with a permanently distinct strategy. Since
-  3.3.8 all three share **Keeper's core** — a **1-hour uptrend context**
-  (`contextClose > ema50 && ema20 > ema50`) and an orderly EMA20 pullback on the
-  signal timeframe — and differ in their trigger, timeframe and universe:
-  - `trend` (Keeper) — the baseline: the core plus a **resumption close** above
-    the prior high and the signal EMA20, on 15m.
-  - `breakout` (Scout) — the core plus a **breakout above the pre-breakout range
-    on a relative-volume surge**, on 5m, over meme/speculative markets.
-  - `momentum` (Spark) — the core plus **positive 24h/7d momentum, price above
-    hourly EMA20 and a continuation breakout**, ranked to the top quintile.
-    The three trigger/timeframe/universe combinations must always stay distinct;
-    never merge them.
-
-  The context is the **1-hour** frames, not the 4-hour. Keeper's original
-  4-hour/250-bar stack needed ~41 days of history and starved every other market;
-  do not reintroduce it.
+- **Three strategy bots**, each running one **strategy template** from the pool.
+  Since 3.6.0 the templates reproduce the three top performers from the original
+  beebots, plus Keeper:
+  - `momentum` (Spark) — **Hexchaser**: the strongest 7-day momentum coins,
+    ranked by the collector; long while momentum stays positive.
+  - `breakout` (Scout) — **Orakelia**: the strongest 7-day momentum, but only
+    while price **and** volume are rising.
+  - `trend` (Keeper) — **Market Mover**: accumulate the largest **top-20** coins
+    by market cap and hold.
+  - `trend_pullback` remains in the pool as an alternative.
+  The bots differ only in **what they buy**; since 3.6.0 they share one exit and
+  sizing path (below), so never reintroduce per-strategy exit rules.
 
 - **`maxCandidates` is fixed at 100 and is not review-tunable.** It is a
   structural cap (how many candidates a bot may assess), so it is locked: not in
@@ -66,8 +62,9 @@ and must never be coupled:
 1. **Decision stream** — the _engine_ selection in the dashboard
    (`jev`, `laya`, `llm`, `jev+llm`, `laya+llm`). `laya` means Laya decides and
    the LLM is not used for trades. This switch affects **trades only**.
-2. **Review** — the _"Use the LLM for the hourly review"_ toggle
-   (`review.llm`, default **on**). This affects the **hourly review only**.
+2. **Review** — the _"Use the LLM for the daily review"_ toggle
+   (`review.llm`, default **on**). This affects the **daily apply only**; the
+   hourly pass is always Laya-only data collection.
 
    Turning the LLM off for the decision stream (engine = `laya`) **must never**
    turn off the LLM review. If the LLM review is on but unavailable or its reply
@@ -75,33 +72,37 @@ and must never be coupled:
 
 ## Strategy pool and rotation
 
-Each bot runs one **strategy template** from a fixed, pre-authored pool
-(`STRATEGY_POOL` in `strategy-v2.mjs`), selected by `params.<bot>.strategy`:
+Each bot runs one **strategy template** from a **dynamic pool**
+(`getTemplates()` in `strategy-v2.mjs`), selected by `params.<bot>.strategy`. A
+template is a **coded rule + universe + timeframe**; the daily review may delete
+a losing one or add a new combination (`strategyPool` target), but it can never
+add a rule that is not coded. The initial pool:
 
-`trend_pullback` (Keeper), `momentum_leaders` (Spark), `momentum_rotation_fast`
-(Scout), `mean_reversion`, `breakout_retest`, `volatility_compression`,
-`range_mean_return`.
+`hexchaser` (7d momentum leaders), `orakelia` (7d momentum + rising price &
+volume), `market_mover` (top-20 accumulation), `trend_pullback` (Keeper).
 
-The defaults keep the three bots distinct: **Keeper = `trend_pullback`**,
-**Spark = `momentum_leaders`** (blend of 24h + 7d momentum, top-3 leaders over
-the top-100 market cap), **Scout = `momentum_rotation_fast`** (4h + 24h
-momentum, top-3 leaders over the full universe). The rotation templates have no
-pullback/breakout gate: they hold the **top-3 leaders** and exit only on their
-own risk exits - the protective/plan stop and the ATR trailing stop. They are
-**not** sold merely for dropping out of the leader set (that churns fees); the
-slot is instead refilled from the then-current top-3 only after a position
-actually exits. The decider is **not offered a discretionary SELL** for a
-rotation position (HOLD only) - every exit is code-managed, so it cannot dump a
-leader minutes after buying it. They are also exempt from the anti-chase
-`maxEntry` cap (buying strength is the point; size is still risk-capped by the
-stop). `evaluate()` dispatches on the selected template.
+The defaults: **Spark = `hexchaser`** (top-3 7d leaders over the full universe),
+**Scout = `orakelia`** (top-3 7d leaders that also have rising price and volume),
+**Keeper = `market_mover`** (the largest top-20 by market cap). Templates have no
+pullback/breakout gate where their rule does not need one: the momentum rules
+hold the **top-3 leaders**; Market Mover holds the top-20. `evaluate()`
+dispatches on the template's rule; the collector applies its universe
+(`all`/`top100`/`top20`) and its ranking. The fallback to the built-ins means a
+bot whose template was deleted keeps trading until the review reassigns it.
+
+**One exit and sizing path (3.6.0).** Every bot - and Dice - exits only on the
+**percentage protective stop** (`stopPct`), the **trailing stop**
+(`trailActivationPct`/`trailPct`) or `maxHoldHours`. No strategy attaches an exit
+policy and there are no rule-based strategy exits. `executionPlan` sizes against
+`stopPct` (size = `riskPct / stopPct`), so a position is ~25-33% of capital. The
+deciser is **never offered a discretionary SELL** for any strategy - HOLD only.
 
 The Trade Review may reassign a bot to a different template, and is **required**
 to do so when the bot is flagged: after **10 closed trades** and losing money,
 the review replaces the losing strategy rather than nudging it.
 Open positions are left to resolve; new entries use the new strategy.
-`maxCandidates` is never review-tunable. **Any** review (hourly or
-streak-triggered) may adjust or rotate any bot's strategy; no template is pinned.
+`maxCandidates` is never review-tunable. The **daily** pass may adjust or rotate
+any bot's strategy and may edit the pool; no template is pinned.
 
 **Losing-streak trigger.** When a bot closes **5 trades in a row at a loss**, the
 engine immediately runs a **focused review of just that bot** (once per streak -
@@ -169,26 +170,35 @@ return over the window. This is the Timeframe Lab (`src/timeframe-lab.mjs`).
   at least the current timeframe's. The model cannot guess past this gate.
 - The lab is deterministic and side-effect free: no orders, no LLM.
 
-## The hourly review pipeline
+## The review pipeline (two cadences)
 
-The review runs every hour at `:00`, and once on startup for the hour that just
-closed. It has **two stage**:
+The review runs on two schedules. **Hourly** at wall-clock `:00` it is a
+**data-collection pass**: Laya reviews the hour (Stage 1) and the record is
+stored in `hourlyReviews` (rolling, 48). **No LLM runs and no change is made.**
+**Daily at 06:00 local** (and once on startup if it has been >24 h) the **daily
+apply** runs: the LLM sees the accumulated hourly records as well as Laya's
+current read, and this is the **only** pass that applies changes.
 
-**Stage 1 — Laya reviews the hour.** Laya reads the previous hour as text and
-answers a set of classified heads (the _review questions_). This always runs.
+**Stage 1 — Laya reviews the hour.** Laya reads the hour as text and answers a
+set of classified heads (the _review questions_). This always runs.
 
-**Stage 2 — the LLM reviews Laya's review.** The model is handed **only Laya's
+**Stage 2 — the LLM reviews the day.** The model is handed **only Laya's
 answers** (never the raw hour) plus the per-arm scoreboard, the applied-change
 ledger, the current value of every editable target, and the allowed ranges. It
 may change:
 
 - a bot's **rubric** (the written strategy),
-- Laya's **review questions** (what Laya is asked to judge), and
-- the bots' **numeric strategy** (entry gates, risk, cadence, candidate cap,
-  signal timeframe, Scout's universe categories) and the runtime knobs.
+- Laya's **review questions** (what Laya is asked to judge),
+- the bots' **numeric strategy** (entry gates, risk, cadence, signal timeframe,
+  Scout's universe categories) and the runtime knobs, and
+- the **strategy pool** (`strategyPool`): delete a losing template, or add a new
+  template by combining a coded rule with a universe and timeframe.
 
 When the review toggle is off, or when the LLM stage cannot run, Stage 2 is
 Laya's self-tune instead. Either way the loop keeps improving.
+
+A **focused** review is still triggered immediately when a bot loses 5 in a row;
+it runs Stage 2 at once for that bot only and does not move the daily anchor.
 
 ### Output budget (do not break this)
 

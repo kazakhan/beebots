@@ -1,35 +1,97 @@
 // Closed-bar strategy rules; all lookbacks exclude the bar being evaluated.
 import { refuse } from "./refusal.mjs";
 export const VERSION = "2.0.0";
-// The pool of pre-authored, standard-quality strategy templates the Trade Review
-// may assign to a bot (`params.<bot>.strategy`). Each maps to a trigger below.
-export const STRATEGY_POOL = {
-  trend_pullback: { label: "Trend pullback (Keeper)" },
-  momentum_leaders: { label: "Momentum leaders (7d)" },
-  momentum_rotation_fast: { label: "Momentum rotation (4h-24h)" },
-  mean_reversion: { label: "Mean reversion" },
-  breakout_retest: { label: "Breakout retest" },
-  volatility_compression: { label: "Volatility compression" },
-  range_mean_return: { label: "Range mean return" },
+// A strategy template names one of the CODED rules below, plus the universe it
+// scans and the timeframe its signal is read on. The Trade Review assigns a
+// template to a bot via `params.<bot>.strategy`. The daily review may add a
+// template that recombines these rules (a "new" strategy) and may delete a
+// template that is losing; it can never add a rule that is not coded here, so a
+// template is always executable.
+export const STRATEGY_RULES = {
+  hexchaser: "7-day momentum leaders",
+  orakelia: "7-day momentum + rising price & volume",
+  market_mover: "Top-20 market-cap accumulation",
+  trend_pullback: "Trend pullback (Keeper)",
 };
+// The initial template pool; id -> spec. `universe` is all | top100 | top20.
+export const BUILTIN_TEMPLATES = {
+  hexchaser: {
+    label: "Hexchaser (7d momentum leader)",
+    rule: "hexchaser",
+    universe: "all",
+    timeframe: "15m",
+    count: 3,
+  },
+  orakelia: {
+    label: "Orakelia (7d momentum + volume)",
+    rule: "orakelia",
+    universe: "all",
+    timeframe: "15m",
+    count: 3,
+  },
+  market_mover: {
+    label: "Market Mover (top-20 accumulator)",
+    rule: "market_mover",
+    universe: "top20",
+    timeframe: "1h",
+    count: 3,
+  },
+  trend_pullback: {
+    label: "Trend pullback (Keeper)",
+    rule: "trend_pullback",
+    universe: "all",
+    timeframe: "15m",
+    count: 3,
+  },
+};
+// Kept for callers that only need the built-in names. The live pool may also
+// contain review-created templates loaded via setTemplates().
+export const STRATEGY_POOL = BUILTIN_TEMPLATES;
+let POOL = { ...BUILTIN_TEMPLATES };
+export function setTemplates(map) {
+  // An explicit pool replaces the built-ins (so the daily review can delete a
+  // template); no map resets to the built-ins.
+  if (map && typeof map === "object" && Object.keys(map).length)
+    POOL = { ...map };
+  else POOL = { ...BUILTIN_TEMPLATES };
+}
+export function getTemplates() {
+  return POOL;
+}
+export function resolveTemplate(strat) {
+  // Fall back to the built-ins so a bot whose template was deleted keeps trading
+  // until the review reassigns it.
+  return POOL[strat] ?? BUILTIN_TEMPLATES[strat] ?? null;
+}
 export const DEFAULT_STRATEGY = {
-  breakout: "momentum_rotation_fast",
-  trend: "trend_pullback",
-  momentum: "momentum_leaders",
+  breakout: "orakelia",
+  trend: "market_mover",
+  momentum: "hexchaser",
 };
-// Rotation templates manage every exit in code (stop / trailing) - the decider
-// is not offered a discretionary SELL for a position running one of these, so it
-// cannot dump a leader minutes after buying it.
-export const ROTATION_STRATEGIES = new Set([
-  "momentum_leaders",
-  "momentum_rotation_fast",
-]);
+// Every strategy now manages its own exit in code (percentage stop / trailing /
+// max hold); the decider is never offered a discretionary SELL. Retained as a
+// predicate for callers that still ask.
+export const ROTATION_STRATEGIES = new Set(Object.keys(BUILTIN_TEMPLATES));
 export function isRotationStrategy(strat) {
-  return ROTATION_STRATEGIES.has(strat);
+  return resolveTemplate(strat) !== null;
 }
 // Per-template defaults, merged under the bot defaults, so any bot can run any
 // template even if its own defaults omit the fields that template reads.
 export const TEMPLATE_DEFAULTS = {
+  hexchaser: {
+    maxExtensionAtr: 0.5,
+    minSignalBars: 4,
+    topFraction: 0.2,
+    minBreadth: 10,
+  },
+  orakelia: {
+    maxExtensionAtr: 0.5,
+    minSignalBars: 4,
+    topFraction: 0.2,
+    minBreadth: 10,
+    relativeVolume: 1,
+  },
+  market_mover: { maxExtensionAtr: 0.5, minSignalBars: 4, minBreadth: 1 },
   momentum_leaders: {
     maxExtensionAtr: 0.5,
     minSignalBars: 4,
@@ -75,7 +137,7 @@ export const TEMPLATE_DEFAULTS = {
 };
 export const defaults = {
   breakout: {
-    strategy: "momentum_rotation_fast",
+    strategy: "orakelia",
     rangeBars: 24,
     // Loosened in 2.3.0. The live coverage panel showed genuine breakouts held
     // back by four independent edges at once: compressionAtr 4.13-5.30 against a
@@ -89,6 +151,12 @@ export const defaults = {
     // Meme pairs have wide spreads and thin books; 0.2 vetoed most candidates at
     // the execution-cost check.
     maxCostRisk: 0.4,
+    // The protective stop / trailing / time exits are percentage-based and shared
+    // with the control arm (3.6.0); size = riskPct / stopPct.
+    stopPct: 3,
+    trailPct: 3,
+    trailActivationPct: 3,
+    maxHoldHours: 48,
     trailAtr: 2,
     trailR: 2,
     // Shared Keeper core (3.3.8): the pullback window, measured on the signal
@@ -104,11 +172,15 @@ export const defaults = {
     categories: ["meme", "speculative", "unclassified"],
   },
   trend: {
-    strategy: "trend_pullback",
+    strategy: "market_mover",
     pullbackBars: 5,
     maxExtensionAtr: 0.5,
     riskPct: 1,
     maxCostRisk: 0.2,
+    stopPct: 3,
+    trailPct: 3,
+    trailActivationPct: 3,
+    maxHoldHours: 48,
     trailAtr: 3,
     trailR: 2,
     // Keeper is a day trader: a 15-minute signal on the 4-hour trend context.
@@ -118,11 +190,15 @@ export const defaults = {
     maxCandidates: 25,
   },
   momentum: {
-    strategy: "momentum_leaders",
+    strategy: "hexchaser",
     topFraction: 0.2,
     minBreadth: 10,
     riskPct: 1,
     maxCostRisk: 0.2,
+    stopPct: 3,
+    trailPct: 3,
+    trailActivationPct: 3,
+    maxHoldHours: 48,
     trailAtr: 2.5,
     trailR: 2,
     // The shared trigger reads maxExtensionAtr; without it maxEntry is NaN and
@@ -233,11 +309,25 @@ export function trendCore(f, ctx, prior, rules, fail) {
   return { a, stop: Math.min(...pullback.map((x) => x.low)) - 0.25 * a };
 }
 export function evaluate(id, frames, rules, membership) {
-  // Which pre-authored template this bot runs. Defaults to its historical
-  // strategy; the Trade Review selects from STRATEGY_POOL.
+  // Which template this bot runs. Its `rule` is a coded trigger; the template
+  // may also carry the universe/timeframe. Unknown ids fall back to the bot's
+  // own defaults.
+  const template = resolveTemplate(rules?.strategy);
   const strat =
-    rules?.strategy ?? defaults[id]?.strategy ?? DEFAULT_STRATEGY[id] ?? id;
-  const r = { ...TEMPLATE_DEFAULTS[strat], ...defaults[id], ...rules },
+    template?.rule ??
+    rules?.strategy ??
+    defaults[id]?.strategy ??
+    DEFAULT_STRATEGY[id] ??
+    id;
+  const r = {
+      // Bot defaults are the base; the template's own defaults refine the keys its
+      // rule reads (notably minSignalBars for a different timeframe); an explicit
+      // rule/config value always wins.
+      ...defaults[id],
+      ...TEMPLATE_DEFAULTS[strat],
+      ...rules,
+      ...(template?.timeframe ? { timeframe: template.timeframe } : {}),
+    },
     c = frames.five,
     h = frames.hour;
   // The signal timeframe is tunable (5m / 15m / 1h). The bar period the style
@@ -300,6 +390,63 @@ export function evaluate(id, frames, rules, membership) {
     fail(hp.at(-1) > ema(hp, 20), "Price below hourly EMA20");
     f.stopPrice = close - 2 * a;
     fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rotation = true;
+    f.rankScore = 0;
+    f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "hexchaser") {
+    // Hexchaser: the strongest 7-day momentum coins, ranked by the collector.
+    if ((h?.length ?? 0) < 200 || bars.length < (Number(r.minSignalBars) || 4))
+      throw Error("Hexchaser history warming");
+    const a = atr(h),
+      hp = h.map((x) => x.close);
+    f.atr = a;
+    f.hourClose = hp.at(-1);
+    f.momentum24hPct = (hp.at(-1) / hp.at(-25) - 1) * 100;
+    f.momentum7dPct = (hp.at(-1) / hp.at(-169) - 1) * 100;
+    fail(f.momentum7dPct > 0, "7-day momentum not positive");
+    fail(hp.at(-1) > ema(hp, 20), "Price below hourly EMA20");
+    f.stopPrice = close - 2 * a;
+    fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rotation = true;
+    f.rankScore = 0;
+    f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "orakelia") {
+    // Orakelia: 7-day momentum, but only while price and volume keep rising.
+    if ((h?.length ?? 0) < 200 || bars.length < (Number(r.minSignalBars) || 4))
+      throw Error("Orakelia history warming");
+    const a = atr(h),
+      hp = h.map((x) => x.close);
+    f.atr = a;
+    f.hourClose = hp.at(-1);
+    f.momentum24hPct = (hp.at(-1) / hp.at(-25) - 1) * 100;
+    f.momentum7dPct = (hp.at(-1) / hp.at(-169) - 1) * 100;
+    const vols = h.slice(-25, -1).map((x) => x.volume),
+      med = median(vols);
+    f.relativeVolume = med > 0 ? h.at(-1).volume / med : 0;
+    fail(f.momentum7dPct > 0, "7-day momentum not positive");
+    fail(h.at(-1).close > h.at(-2).close, "Price not rising");
+    fail(f.relativeVolume > 1, "Volume not rising");
+    fail(hp.at(-1) > ema(hp, 20), "Price below hourly EMA20");
+    f.stopPrice = close - 2 * a;
+    fail(close - f.stopPrice <= 3 * a, "Momentum stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rotation = true;
+    f.rankScore = 0;
+    f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "market_mover") {
+    // Market Mover: accumulate the largest top-20 coins and hold. The collector
+    // restricts its universe; here we only avoid buying an established downtrend.
+    if ((h?.length ?? 0) < 60) throw Error("Market-mover history warming");
+    const a = atr(h),
+      hp = h.map((x) => x.close);
+    f.atr = a;
+    f.hourClose = hp.at(-1);
+    f.momentum24hPct = (hp.at(-1) / hp.at(-25) - 1) * 100;
+    fail(hp.at(-1) > ema(hp, 50), "Price below the hourly EMA50");
+    f.stopPrice = close - 2 * a;
+    fail(close - f.stopPrice <= 3 * a, "Stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
     f.rotation = true;
     f.rankScore = 0;
@@ -534,7 +681,10 @@ export function walk(levels, quantity) {
 }
 export function executionPlan(f, q, cash, fee, rules) {
   const riskBudget = (cash * rules.riskPct) / 100;
-  const distance = q.ask - f.stopPrice;
+  // Size against the exit that will actually fire: a percentage stop shared with
+  // the control arm when `stopPct` is set, else the setup geometry stop.
+  const stopPct = Number(rules.stopPct) || 0;
+  const distance = stopPct > 0 ? (q.ask * stopPct) / 100 : q.ask - f.stopPrice;
   if (!(distance > 0 && riskBudget > 0))
     throw refuse("Invalid strategy risk distance");
   const quantity = Math.min(
@@ -543,10 +693,11 @@ export function executionPlan(f, q, cash, fee, rules) {
   );
   const buy = walk(q.asks, quantity),
     sell = walk(q.bids, quantity);
+  const stopLevel = stopPct > 0 ? q.ask * (1 - stopPct / 100) : f.stopPrice;
   const cost =
     quantity *
     (buy - q.ask + 2 * (q.bid - sell) + (q.ask - q.bid) + 2 * fee * buy);
-  const risk = quantity * (buy - f.stopPrice);
+  const risk = quantity * (buy - stopLevel);
   if (cost > risk * rules.maxCostRisk)
     throw refuse("Execution costs exceed strategy risk allowance");
   if (risk + quantity * 2 * fee * buy > riskBudget * 1.001)
@@ -554,8 +705,8 @@ export function executionPlan(f, q, cash, fee, rules) {
   return {
     quote: quantity * q.ask,
     quantity,
-    stopPrice: f.stopPrice,
-    initialRisk: buy - f.stopPrice,
+    stopPrice: stopLevel,
+    initialRisk: buy - stopLevel,
     breakoutLevel: f.channelHigh ?? null,
     atr: f.atr,
     version: VERSION,
