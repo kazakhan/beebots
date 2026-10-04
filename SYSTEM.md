@@ -100,11 +100,14 @@ The Trade Review may reassign a bot to a different template, and is **required**
 to do so when the bot is flagged: after **10 closed trades** and losing money,
 the review replaces the losing strategy rather than nudging it.
 Open positions are left to resolve; new entries use the new strategy.
-`maxCandidates` is never review-tunable. The owner has **pinned** the strategy
-templates for **breakout** and **momentum** (Scout/Spark): their `strategy` is
-excluded from the review's targets and a proposal naming it is refused
-(`effectiveRules` enforces the default regardless). Keeper's template is not
-pinned.
+`maxCandidates` is never review-tunable. **Any** review (hourly or
+streak-triggered) may adjust or rotate any bot's strategy; no template is pinned.
+
+**Losing-streak trigger.** When a bot closes **5 trades in a row at a loss**, the
+engine immediately runs a **focused review of just that bot** (once per streak -
+re-armed when the streak breaks). That review may only change the streaking bot
+(the gate refuses proposals for other bots); it can adjust the bot's numeric
+params or replace its strategy template.
 
 ## Recent-close context (no cooldown)
 

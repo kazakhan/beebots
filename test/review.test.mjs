@@ -24,6 +24,7 @@ import {
   MIN_SAMPLE,
   REVIEW_QUESTIONS,
   scoreboardLines,
+  losingStreaks,
 } from "../src/review.mjs";
 import { validateOverride, overridePath } from "../src/overrides.mjs";
 import { defaultAnalysisQuestions } from "../src/laya.mjs";
@@ -981,7 +982,7 @@ test("the review prompt carries the strategy pool and due flags", async () => {
   }
 });
 
-test("a pinned bot's strategy is not offered to the review", () => {
+test("every bot's strategy is offered to the review", () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-pinview-"));
   const store = new Store(":memory:", config());
   try {
@@ -992,13 +993,12 @@ test("a pinned bot's strategy is not offered to the review", () => {
       config: {},
       dataDir: dir,
     });
-    assert.ok(!reviewer.paramView("breakout").strategy, "breakout hidden");
-    assert.ok(!reviewer.paramView("momentum").strategy, "momentum hidden");
     assert.equal(
-      reviewer.paramView("trend").strategy,
-      "trend_pullback",
-      "trend is still offered",
+      reviewer.paramView("breakout").strategy,
+      "momentum_rotation_fast",
     );
+    assert.equal(reviewer.paramView("momentum").strategy, "momentum_leaders");
+    assert.equal(reviewer.paramView("trend").strategy, "trend_pullback");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -1012,4 +1012,102 @@ test("the scoreboard shows each arm's own P&L, with no Dice deltas", () => {
     !lines.some((l) => /vs Dice|baseline to beat/.test(l)),
     "no Dice comparison",
   );
+});
+
+test("losingStreaks counts trailing consecutive losses", () => {
+  const now = Date.now();
+  const orders = {};
+  for (let i = 0; i < 5; i++) {
+    orders["b" + i] = {
+      id: "b" + i,
+      bot: "breakout",
+      product: "X" + i + "-USDC",
+      side: "BUY",
+      status: "SETTLED",
+      filled: "1",
+      value: "100",
+      fees: "0",
+      created: now - 100000 + i * 1000,
+    };
+    orders["s" + i] = {
+      id: "s" + i,
+      bot: "breakout",
+      product: "X" + i + "-USDC",
+      side: "SELL",
+      status: "SETTLED",
+      filled: "1",
+      value: "90",
+      fees: "0",
+      created: now - 99000 + i * 1000,
+    };
+  }
+  const streaks = losingStreaks(orders);
+  assert.equal(streaks.breakout, 5);
+  assert.equal(streaks.momentum, 0);
+  // A win at the end resets the streak.
+  orders["w"] = {
+    id: "w",
+    bot: "breakout",
+    product: "Y-USDC",
+    side: "BUY",
+    status: "SETTLED",
+    filled: "1",
+    value: "100",
+    fees: "0",
+    created: now,
+  };
+  orders["ws"] = {
+    id: "ws",
+    bot: "breakout",
+    product: "Y-USDC",
+    side: "SELL",
+    status: "SETTLED",
+    filled: "1",
+    value: "120",
+    fees: "0",
+    created: now + 1000,
+  };
+  assert.equal(losingStreaks(orders).breakout, 0);
+});
+
+test("a focused review refuses proposals for other bots", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-focus-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model: {},
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    const proposed = reviewer.currentFor("params.momentum");
+    reviewer.model = {
+      review: async () => ({
+        data: { proposals: [{ target: "params.momentum", proposed }] },
+      }),
+    };
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+      focusArm: "breakout",
+      focusStreak: 5,
+    });
+    assert.equal(rec.focus.arm, "breakout");
+    assert.equal(rec.proposals.length, 1);
+    assert.ok(!rec.proposals[0].gate.ok);
+    assert.ok(
+      rec.proposals[0].gate.reasons.some((r) => /Focused review/.test(r)),
+      "the other bot's proposal is refused",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

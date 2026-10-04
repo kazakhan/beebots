@@ -70,10 +70,10 @@ export const RUNTIME_SCHEMA = {
 // CURRENT TARGETS) and validateOverride refuses any proposal that sets them.
 export const LOCKED_PARAMS = new Set(["maxCandidates"]);
 
-// The owner pinned these bots' strategy templates: the review may tune their
-// numeric params but must not swap the template (the default is enforced in
-// effectiveRules and refused as a proposal).
-export const PINNED_STRATEGY_BOTS = new Set(["breakout", "momentum"]);
+// Bots whose strategy template is pinned by the owner (none by default: any
+// review may rotate or adjust a bot's strategy). The mechanism is kept so an
+// owner can pin a bot again.
+export const PINNED_STRATEGY_BOTS = new Set();
 export function strategyPinned(target) {
   return (
     typeof target === "string" &&

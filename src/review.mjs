@@ -280,6 +280,23 @@ export function closedRoundTrips(orders) {
   return trips;
 }
 
+// Trailing consecutive-loss streak per strategy arm: walk back from the most
+// recent closed round trip until a win. A streak of 5 triggers a focused review.
+export function losingStreaks(orders) {
+  const trips = closedRoundTrips(orders);
+  const out = {};
+  for (const arm of STRATEGY_ARMS) {
+    const list = (trips[arm] ?? []).slice().sort((a, b) => a.closed - b.closed);
+    let n = 0;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].pnl < 0n) n++;
+      else break;
+    }
+    out[arm] = n;
+  }
+  return out;
+}
+
 const fitBucket = (fit) =>
   !Number.isFinite(fit)
     ? "unmatched"
@@ -737,7 +754,15 @@ export class TradeReview {
   }
   // One hourly pass: gather the hour, let Laya classify it, let the model propose
   // changes, gate each proposal, and apply only what the evidence supports.
-  async run({ since, until, coverage, autoApply = true, timeframeLab = null }) {
+  async run({
+    since,
+    until,
+    coverage,
+    autoApply = true,
+    timeframeLab = null,
+    focusArm = null,
+    focusStreak = 0,
+  }) {
     const events = this.store
       .recent(2000)
       .filter((e) => e.ts >= since && e.ts < until);
@@ -801,6 +826,15 @@ export class TradeReview {
           Object.keys(STRATEGY_POOL).join(", ") +
           "\n\nSTRATEGY DUE (10 closed trades and losing money: replace the strategy)\n" +
           JSON.stringify(this.strategyDue(s.orders)) +
+          (focusArm
+            ? "\n\nFOCUS: review ONLY the " +
+              focusArm +
+              " bot. It has lost its last " +
+              focusStreak +
+              " closed trades in a row. Propose a change for " +
+              focusArm +
+              " only - adjust its numeric params, or replace its strategy template. Do NOT propose changes for any other bot."
+            : "") +
           "\n\nRE-ENTRY CONTEXT (closes inside the reentryLookbackBars window)\n" +
           JSON.stringify(this.reentryStats(s.orders)) +
           "\n\nCURRENT TARGETS\n" +
@@ -900,6 +934,17 @@ export class TradeReview {
         const tfError = this.timeframeGate(p, timeframeLab);
         if (tfError) gate.reasons.push(tfError);
       }
+      // A focused (losing-streak) review may only change the focused bot.
+      if (focusArm) {
+        const t = p?.target ?? "";
+        const armOf = t.startsWith("params.")
+          ? t.slice("params.".length)
+          : t.startsWith("rubric.")
+            ? t.slice("rubric.".length)
+            : null;
+        if (armOf !== focusArm)
+          gate.reasons.push(`Focused review: only ${focusArm} may be changed`);
+      }
       gate.ok = gate.ok && gate.reasons.length === 0;
       let applied = false;
       if (gate.ok && autoApply) {
@@ -929,6 +974,7 @@ export class TradeReview {
       timeframeLab,
       strategyDue: this.strategyDue(s.orders),
       reentry: this.reentryStats(s.orders),
+      focus: focusArm ? { arm: focusArm, streak: focusStreak } : null,
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },

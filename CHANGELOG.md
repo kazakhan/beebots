@@ -14,6 +14,33 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.5.4] - 2026-10-04 - A 5-loss streak triggers an immediate focused review
+
+### Added
+
+- **Losing-streak trigger.** `losingStreaks(orders)` counts each arm's trailing
+  consecutive losing round trips. When an arm reaches **5 in a row**, the engine
+  immediately runs a **focused review of just that bot** (once per streak;
+  re-armed when the streak breaks with a win). A `status` event records it.
+- **Focused reviews are scoped.** `reviewer.run({ focusArm, focusStreak })` adds a
+  `FOCUS` block to the prompt and the gate **refuses any proposal for another
+  bot** - the LLM may adjust the streaking bot's numeric params or replace its
+  strategy template. The record carries `focus: { arm, streak }`.
+
+### Changed
+
+- **Nothing is pinned any more.** Any review may adjust or rotate any bot's
+  strategy template (`PINNED_STRATEGY_BOTS` is now empty); the pin mechanism is
+  retained in case the owner wants to re-pin.
+
+### Verification
+
+- 300 Node tests pass, up from 297: `losingStreaks` trailing count + reset, the
+  focused-review gate refusing other bots, and the engine firing one focused
+  review per streak.
+
+---
+
 ## [3.5.3] - 2026-10-04 - Pin Scout/Spark strategies; drop the Dice comparison
 
 Two owner directives.

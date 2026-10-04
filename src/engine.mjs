@@ -22,7 +22,7 @@ import {
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
 import { buildTimeframeLab } from "./timeframe-lab.mjs";
-import { closedRoundTrips } from "./review.mjs";
+import { closedRoundTrips, losingStreaks } from "./review.mjs";
 import {
   readJsonOverride,
   validateParams,
@@ -40,7 +40,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.5.3";
+const BUILD = "3.5.4";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
@@ -478,7 +478,7 @@ export class Engine {
     // next wall-clock :00. review() is idempotent for an already-reviewed hour.
     void this.review();
   }
-  async review(force = false) {
+  async review(force = false, focusArm = null, focusStreak = 0) {
     if (this.reviewing || this.stopped) return;
     const until = Math.floor(Date.now() / 3600000) * 3600000;
     const since = until - 3600000;
@@ -495,6 +495,8 @@ export class Engine {
         coverage: this.market.coverage?.() ?? null,
         autoApply: this.config.review?.autoApply !== false,
         timeframeLab: this.timeframeLab(),
+        focusArm,
+        focusStreak,
       });
       this.setError("review", null);
     } catch (e) {
@@ -502,6 +504,41 @@ export class Engine {
       this.store.event("error", { component: "review", message: e.message });
     } finally {
       this.reviewing = false;
+    }
+  }
+  // Trigger an immediate, focused review when a bot has lost 5 (or more) closed
+  // trades in a row. Fires once per streak: the marker is cleared when the
+  // streak breaks, so the next losing streak triggers a fresh review.
+  checkLosingStreaks() {
+    if (!this.reviewer || this.stopped) return;
+    const streaks = losingStreaks(this.store.read().orders);
+    for (const arm of IDS) {
+      const n = streaks[arm] ?? 0;
+      const flagged = !!this.store.read().streakReviewed?.[arm];
+      if (n >= 5 && !flagged) {
+        this.store.change(
+          (s) => {
+            s.streakReviewed ??= {};
+            s.streakReviewed[arm] = true;
+          },
+          null,
+          null,
+        );
+        this.store.event("status", {
+          bot: arm,
+          message: `Lost ${n} in a row - focused review triggered`,
+        });
+        void this.review(true, arm, n);
+      } else if (n < 5 && flagged) {
+        this.store.change(
+          (s) => {
+            s.streakReviewed ??= {};
+            s.streakReviewed[arm] = false;
+          },
+          null,
+          null,
+        );
+      }
     }
   }
   // Deterministic evidence about each bot's signal timeframe, for the hourly
@@ -1136,6 +1173,8 @@ export class Engine {
     } finally {
       this.busy = false;
     }
+    // A bot that has just lost its 5th in a row gets an immediate, focused review.
+    this.checkLosingStreaks();
   }
   setError(scope, message) {
     this.errors.delete(scope);

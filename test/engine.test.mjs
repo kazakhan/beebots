@@ -390,7 +390,7 @@ test("a rotation position is not sold just for leaving the leader set", () => {
   }
 });
 
-test("effectiveRules pins the strategy for breakout and momentum", () => {
+test("effectiveRules honours a stored strategy override", () => {
   const c = config();
   const dir = mkdtempSync(join(tmpdir(), "beebots-pinrules-"));
   c.dataDir = dir;
@@ -410,11 +410,68 @@ test("effectiveRules pins the strategy for breakout and momentum", () => {
       model: {},
     });
     const b = engine.effectiveRules("breakout");
-    assert.equal(b.strategy, "momentum_rotation_fast", "pinned to the default");
+    assert.equal(b.strategy, "breakout_retest", "the override applies");
     assert.equal(b.riskPct, 1.2, "other params still apply");
     assert.equal(engine.effectiveRules("trend").strategy, "trend_pullback");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a losing streak triggers an immediate focused review", async () => {
+  const f = fixture();
+  try {
+    let seen = null;
+    f.engine.reviewer = {
+      run: async (args) => {
+        seen = args;
+      },
+    };
+    const now = Date.now();
+    const orders = {};
+    for (let i = 0; i < 5; i++) {
+      orders["b" + i] = {
+        id: "b" + i,
+        bot: "breakout",
+        product: "X" + i + "-USDC",
+        side: "BUY",
+        status: "SETTLED",
+        filled: "1",
+        value: "100",
+        fees: "0",
+        created: now - 100000 + i * 1000,
+      };
+      orders["s" + i] = {
+        id: "s" + i,
+        bot: "breakout",
+        product: "X" + i + "-USDC",
+        side: "SELL",
+        status: "SETTLED",
+        filled: "1",
+        value: "90",
+        fees: "0",
+        created: now - 99000 + i * 1000,
+      };
+    }
+    f.store.change(
+      (s) => {
+        s.orders = orders;
+      },
+      null,
+      null,
+    );
+    f.engine.checkLosingStreaks();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.ok(seen, "the review ran");
+    assert.equal(seen.focusArm, "breakout");
+    assert.equal(seen.focusStreak, 5);
+    // Once per streak.
+    seen = null;
+    f.engine.checkLosingStreaks();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(seen, null, "not re-triggered for the same streak");
+  } finally {
+    f.store.close();
   }
 });
