@@ -43,7 +43,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.6.0";
+const BUILD = "3.6.1";
 // How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
 // every timeframe on the same window.
 const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;

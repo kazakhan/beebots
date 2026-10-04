@@ -14,6 +14,24 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.6.1] - 2026-10-05 - Template timeframe is honoured end to end
+
+### Fixed
+
+- **A template's signal timeframe now drives both the candidate interval and the
+  signal time.** In 3.6.0 `evaluate()` stamped each candidate with the bot id's
+  old interval (`breakout`->5m) while the candidate was read on the template's
+  timeframe (Orakelia->15m). The collector then dropped every Scout candidate as
+  stale, so Scout evaluated products but never offered a trade. A shared
+  `TF_MS` map now sets `period` and `signalTime` from the resolved timeframe and
+  the collector deduplicates on the same interval.
+
+### Verification
+
+- 306 Node tests still pass.
+
+---
+
 ## [3.6.0] - 2026-10-05 - Three winning strategies, one exit path, daily review
 
 ### Added

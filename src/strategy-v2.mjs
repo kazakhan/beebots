@@ -68,6 +68,9 @@ export const DEFAULT_STRATEGY = {
   trend: "market_mover",
   momentum: "hexchaser",
 };
+// Milliseconds per signal timeframe, shared so the collector's interval and the
+// signal time evaluate stamps always agree with the chosen template.
+export const TF_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // Every strategy now manages its own exit in code (percentage stop / trailing /
 // max hold); the decider is never offered a discretionary SELL. Retained as a
 // predicate for callers that still ask.
@@ -340,10 +343,10 @@ export function evaluate(id, frames, rules, membership) {
     close = last.close;
   const f = {
     strategyVersion: VERSION,
-    period: id === "breakout" ? "5m" : id === "trend" ? "1h" : "15m",
-    signalTime:
-      last.time +
-      (id === "breakout" ? 300000 : id === "trend" ? 3600000 : 900000),
+    // Both the period label and the signal time follow the resolved timeframe
+    // (template first), so a template on 15m/1h is deduplicated on that boundary.
+    period: r.timeframe,
+    signalTime: last.time + (TF_MS[r.timeframe] ?? 900000),
     close,
     previousClose: prior.at(-1)?.close,
     setupEligible: false,

@@ -9,6 +9,7 @@ import {
   rankMomentum,
   aggregate,
   DEFAULT_STRATEGY,
+  TF_MS,
   resolveTemplate,
 } from "./strategy-v2.mjs";
 import { fromTrades } from "./repair-candles.mjs";
@@ -357,6 +358,9 @@ export class UniverseMarket extends Market {
     const template = resolveTemplate(rules.strategy ?? DEFAULT_STRATEGY[id]);
     const rule = template?.rule ?? rules.strategy ?? DEFAULT_STRATEGY[id];
     const universe = template?.universe ?? "all";
+    // The dedup interval follows the template's signal timeframe, matching the
+    // signal time evaluate stamps on each candidate.
+    const interval = TF_MS[template?.timeframe ?? rules.timeframe] ?? 900000;
     // The template's universe: top-20 / top-100 by market cap, or every eligible
     // market. `topFraction` on the ranking is applied later for legacy rules.
     const list =
@@ -382,8 +386,6 @@ export class UniverseMarket extends Market {
       }
       try {
         const f = evaluate(id, frames, rules, entry.membership);
-        const interval =
-          id === "breakout" ? 300000 : id === "trend" ? 3600000 : 900000;
         if (f.signalTime < Math.floor(Date.now() / interval) * interval)
           continue;
         rows.push({
