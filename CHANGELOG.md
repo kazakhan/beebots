@@ -14,6 +14,35 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.7.0] - 2026-10-05 - 4-hourly LLM apply, Timeframe Lab removed, timeframe fixed
+
+### Changed
+
+- **The LLM apply now runs every 4 hours** at local 00/04/08/12/16/20 (was once
+  a day at 06:00), and on startup if more than 4 hours have passed. The **hourly
+  Laya data pass is unchanged** - the LLM reviews the hourly records collected
+  since the last apply. `Engine.scheduleDailyApply` -> `scheduleApply`;
+  `daily` -> `applyWindow` throughout.
+- **`MIN_SAMPLE` 25 -> 10.** With six apply windows a day, a change may rest on a
+  smaller sample.
+- **A bot's signal `timeframe` is fixed by its template and locked.** Added to
+  `LOCKED_PARAMS`, out of the tunable key list, refused by `validateOverride`,
+  and pinned in `effectiveRules` so neither config nor a stored override can move
+  it.
+- **The Timeframe Lab is gone.** The code-generated simulation over closed bars
+  - the `TIMEFRAME COMPARISON` prompt block, the `timeframeGate`, the
+  `timeframeLab` record field, the dashboard "Timeframe Lab - simulated" card,
+  `src/timeframe-lab.mjs` and its tests - is removed. The review no longer
+  receives or is gated by simulated timeframe returns.
+
+### Verification
+
+- 304 Node tests pass: the locked timeframe (proposal refused, pinned in
+  `effectiveRules`), the prompt/record no longer carrying any timeframe
+  simulation, and the hourly data still flowing into the apply window.
+
+---
+
 ## [3.6.2] - 2026-10-05 - Keeper gets the same time stop as the other arms
 
 ### Changed

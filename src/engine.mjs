@@ -24,7 +24,6 @@ import {
   setTemplates,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
-import { buildTimeframeLab } from "./timeframe-lab.mjs";
 import { closedRoundTrips, losingStreaks } from "./review.mjs";
 import {
   readJsonOverride,
@@ -43,10 +42,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.6.2";
-// How far back the Timeframe Lab simulates. 5m/15m history is ~25h, so 24h keeps
-// every timeframe on the same window.
-const TIMEFRAME_LAB_LOOKBACK_MS = 24 * 3600000;
+const BUILD = "3.7.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -225,6 +221,10 @@ export class Engine {
     // Fixed structural cap: the review must never change it. Pin it even if a
     // stored override carries a value (the key is locked out of the tunables).
     base.maxCandidates = 100;
+    // The signal timeframe is fixed by the template (3.7.0): it is locked out
+    // of the tunables and cannot be moved off the template by config or an
+    // override.
+    if (template?.timeframe) base.timeframe = template.timeframe;
     // The owner pinned these bots' strategy templates; the default is enforced
     // even if a stored override (or the review) named another.
     if (PINNED_STRATEGY_BOTS.has(id)) base.strategy = DEFAULT_STRATEGY[id];
@@ -472,12 +472,12 @@ export class Engine {
     void this.cycle();
     void this.protect();
   }
-  // The Trade Review has two cadences (3.6.0):
+  // The Trade Review has two cadences (3.7.0):
   //   hourly, at wall-clock :00 - Laya reads the hour and the result is STORED
-  //     (no LLM, no changes). It is the data the daily pass reasons over.
-  //   daily, at 06:00 local - the LLM reviews the accumulated day and applies
-  //     changes. This is the only time a strategy or parameter can change.
-  // A plain interval would drift, so the hourly pass is anchored to the hour.
+  //     (no LLM, no changes). It is the data the apply pass reasons over.
+  //   every 4 hours, at local 00/04/08/12/16/20 - the LLM reviews the hourly
+  //     data collected since the last apply and is the only pass that applies
+  //     changes. A plain interval would drift, so the hourly pass is anchored.
   scheduleReview() {
     if (!this.reviewer || this.config.review?.enabled === false) return;
     const now = Date.now();
@@ -496,23 +496,24 @@ export class Engine {
     );
     first.unref?.();
     this.timers.push(first);
-    this.scheduleDailyApply();
-    // On startup, apply the daily pass if one is due (>24h since the last);
-    // otherwise collect the last closed hour as data.
+    this.scheduleApply();
+    // On startup, apply if one is due (>4h since the last); otherwise collect
+    // the last closed hour as data.
     void this.startupReview();
   }
-  // 06:00 local, every day. Rescheduled after each run so a DST shift cannot
-  // walk the anchor away from the wall clock.
-  scheduleDailyApply() {
+  // Every 4 hours at local 00/04/08/12/16/20. Rescheduled after each run so a
+  // DST shift cannot walk the anchor away from the wall clock.
+  scheduleApply() {
     if (!this.reviewer || this.config.review?.enabled === false) return;
     const now = Date.now();
     const d = new Date(now);
-    d.setHours(6, 0, 0, 0);
-    if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+    d.setMinutes(0, 0, 0);
+    d.setHours(Math.floor(d.getHours() / 4) * 4);
+    if (d.getTime() <= now) d.setHours(d.getHours() + 4);
     const t = setTimeout(
       () => {
-        void this.review(false, null, 0, { apply: true, daily: true });
-        this.scheduleDailyApply();
+        void this.review(false, null, 0, { apply: true, applyWindow: true });
+        this.scheduleApply();
       },
       Math.max(1000, d.getTime() - now + 1500),
     );
@@ -522,26 +523,31 @@ export class Engine {
   async startupReview() {
     const s = this.store.read();
     const last = Number(s.lastApplyReviewAt) || 0;
-    if (Date.now() - last > 86400000)
-      await this.review(false, null, 0, { apply: true, daily: true });
+    if (Date.now() - last > 4 * 3600000)
+      await this.review(false, null, 0, { apply: true, applyWindow: true });
     else await this.review(false, null, 0, { apply: false });
   }
   async review(
     force = false,
     focusArm = null,
     focusStreak = 0,
-    { apply = true, daily = false } = {},
+    { apply = true, applyWindow = false } = {},
   ) {
     if (this.reviewing || this.stopped) return;
     const until = Math.floor(Date.now() / 3600000) * 3600000;
     const s = this.store.read();
     let since = until - 3600000;
-    if (daily) since = Number(s.lastApplyReviewAt) || until - 86400000;
+    if (applyWindow) since = Number(s.lastApplyReviewAt) || until - 14400000;
     if (!force) {
-      // Hourly data and the daily apply are guarded separately so the hourly
-      // pass can never suppress the daily one.
+      // Hourly data and the apply pass are guarded separately so the hourly
+      // pass can never suppress the apply one.
       if (apply) {
-        if (s.lastReview?.until === until && !s.lastReviewError) return;
+        if (
+          s.lastReview?.until === until &&
+          s.lastReview?.applyWindow &&
+          !s.lastReviewError
+        )
+          return;
       } else if (s.lastHourly?.until === until) return;
     }
     this.reviewing = true;
@@ -551,11 +557,10 @@ export class Engine {
         until,
         coverage: this.market.coverage?.() ?? null,
         autoApply: this.config.review?.autoApply !== false,
-        timeframeLab: this.timeframeLab(),
         focusArm,
         focusStreak,
         apply,
-        daily,
+        applyWindow,
         hourly: Array.isArray(s.hourlyReviews) ? s.hourlyReviews : [],
       });
       this.setError("review", null);
@@ -600,28 +605,6 @@ export class Engine {
         );
       }
     }
-  }
-  // Deterministic evidence about each bot's signal timeframe, for the hourly
-  // review. Re-runs each bot's own strategy over the candles already held, at
-  // 5m/15m/1h, and simulates its own exits. Bounded (product/eval/time caps) and
-  // side-effect free; returns null when no candle history is loaded.
-  timeframeLab() {
-    const market = this.market;
-    if (!market?.frames?.size) return null;
-    const products = Array.isArray(market.products) ? market.products : [];
-    if (!products.length) return null;
-    const until = Date.now();
-    return buildTimeframeLab({
-      products,
-      framesFor: (p) => market.frames.get(p),
-      membershipFor: (p) =>
-        market.entries?.get(p)?.membership ?? { category: "unclassified" },
-      arms: IDS.map((id) => ({ id, rules: this.effectiveRules(id) })),
-      // 5m/15m history is ~25h, so a longer lookback buys nothing for them; 24h
-      // keeps all three timeframes comparable.
-      since: until - TIMEFRAME_LAB_LOOKBACK_MS,
-      until,
-    });
   }
   stop() {
     this.stopped = true;

@@ -152,3 +152,11 @@ test("any bot's strategy can be proposed (none pinned)", () => {
     null,
   );
 });
+
+test("the signal timeframe is a fixed, non-tunable parameter", () => {
+  assert.ok(!PARAM_KEYS.includes("timeframe"), "not offered as a tunable");
+  assert.match(
+    validateOverride("params.trend", '{"timeframe":"5m"}'),
+    /fixed parameter/,
+  );
+});

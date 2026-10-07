@@ -73,10 +73,9 @@ import {
 
 export { ALLOWED_TARGETS, targetAllowed };
 
-// Minimum closed round-trips before an EDGE change may be applied. Raised to 25
-// in 3.6.0: changes are now made once a day, so each one must rest on a real
-// sample rather than an hourly handful.
-export const MIN_SAMPLE = 25;
+// Minimum closed round-trips before an EDGE change may be applied. Now that the
+// apply pass runs every 4 hours, a change may rest on a smaller sample (10).
+export const MIN_SAMPLE = 10;
 // Relative expectancy improvement required over the control arm.
 export const MIN_MARGIN = 0.1;
 // Hours a proposal must hold in shadow before promotion.
@@ -514,9 +513,8 @@ const REVIEW_SYSTEM =
   "change one, must still be the full document with its heading. Keep it " +
   "compact: a short summary (at most 600 characters), at most three " +
   "observations, a brief rationale. Numeric values must stay within the " +
-  "allowed ranges; anything outside is refused. A timeframe change must cite " +
-  "the TIMEFRAME COMPARISON and is refused unless the proposed timeframe's " +
-  "simulated net return is at least the current one. Rubrics must retain " +
+  "allowed ranges; anything outside is refused. A bot's signal timeframe is " +
+  "FIXED by its template and is not changeable. Rubrics must retain " +
   "their safety clauses: no shorts, Laya is uncalibrated evidence not a " +
   "decision or probability, code controls size and execution, do not alter " +
   "stops, do not force trades. Capital, mode, leverage and disabling stops " +
@@ -722,56 +720,18 @@ export class TradeReview {
       VARIANT_NAMES.join(", ")
     );
   }
-  // A change to a bot's signal timeframe is allowed only with Timeframe Lab
-  // evidence. Returns a refusal reason, or null when the proposal does not touch
-  // a timeframe or the evidence supports it. Deterministic, so the model cannot
-  // guess a timeframe change past the gate.
-  timeframeGate(proposal, lab) {
-    const target = proposal?.target;
-    if (typeof target !== "string" || !target.startsWith("params."))
-      return null;
-    let proposed;
-    try {
-      proposed = JSON.parse(proposal.proposed);
-    } catch {
-      return null;
-    }
-    const tf = proposed?.timeframe;
-    if (typeof tf !== "string") return null;
-    const arm = target.slice("params.".length);
-    // The current timeframe comes from the live target value, not the lab, so a
-    // params proposal that merely repeats the existing timeframe is not gated.
-    let current = null;
-    try {
-      current = JSON.parse(this.currentFor(target))?.timeframe ?? null;
-    } catch {
-      current = null;
-    }
-    if (tf === current) return null;
-    const entry = lab?.arms?.[arm];
-    if (!entry)
-      return `No timeframe evidence for ${arm}; cannot change timeframe`;
-    const next = entry.timeframes?.[tf];
-    const cur = entry.timeframes?.[current];
-    const MIN = 3;
-    if (!next || next.partial || next.trades < MIN)
-      return `Insufficient timeframe evidence for ${arm} ${tf} (${next?.trades ?? 0} trades${next?.partial ? ", partial" : ""})`;
-    if (cur && !cur.partial && cur.trades >= MIN && next.net < cur.net)
-      return `Timeframe ${tf} underperforms ${current} for ${arm} (${next.net}% vs ${cur.net}%)`;
-    return null;
-  }
-  // One hourly pass: gather the hour, let Laya classify it, let the model propose
-  // changes, gate each proposal, and apply only what the evidence supports.
+  // One apply pass: gather the window, let Laya classify it, let the model
+  // propose changes, gate each proposal, and apply only what the evidence
+  // supports.
   async run({
     since,
     until,
     coverage,
     autoApply = true,
-    timeframeLab = null,
     focusArm = null,
     focusStreak = 0,
     apply = true,
-    daily = false,
+    applyWindow = false,
     hourly = [],
   }) {
     const events = this.store
@@ -863,12 +823,12 @@ export class TradeReview {
           JSON.stringify(laya.answers) +
           "\n\nSCOREBOARD\n" +
           scoreboardLines(s.orders).join("\n") +
-          (daily && hourly.length
-            ? "\n\nHOURLY DATA SINCE LAST APPLY (each hour's Laya read; this daily " +
+          (applyWindow && hourly.length
+            ? "\n\nHOURLY DATA SINCE LAST APPLY (each hour's Laya read; this 4-hour " +
               "pass is the only one that changes anything)\n" +
               JSON.stringify(
                 hourly
-                  .slice(-48)
+                  .filter((h) => Number(h?.until) > Number(since))
                   .map((h) => h?.laya?.answers ?? { error: h?.error ?? null }),
               )
             : "") +
@@ -895,9 +855,6 @@ export class TradeReview {
           JSON.stringify(this.reentryStats(s.orders)) +
           "\n\nCURRENT TARGETS\n" +
           JSON.stringify(this.currentTargets()) +
-          "\n\nTIMEFRAME COMPARISON (code-generated simulation over the candles " +
-          "held; a timeframe change is REFUSED unless this supports it)\n" +
-          JSON.stringify(timeframeLab) +
           "\n\n" +
           this.schemaText();
         try {
@@ -1005,13 +962,6 @@ export class TradeReview {
             minSample: this.config?.review?.minSample,
             requireControl: this.config?.review?.requireControl,
           });
-      // A change to a bot's signal timeframe is allowed only with evidence: the
-      // Timeframe Lab must show the proposed timeframe is at least as good as
-      // the current one. Deterministic - never the model's word.
-      if (!isRevert) {
-        const tfError = this.timeframeGate(p, timeframeLab);
-        if (tfError) gate.reasons.push(tfError);
-      }
       // A focused (losing-streak) review may only change the focused bot.
       if (focusArm) {
         const t = p?.target ?? "";
@@ -1049,11 +999,10 @@ export class TradeReview {
       proposals: reviewed,
       sample,
       layaPerf: perf,
-      timeframeLab,
       strategyDue: this.strategyDue(s.orders),
       reentry: this.reentryStats(s.orders),
       focus: focusArm ? { arm: focusArm, streak: focusStreak } : null,
-      daily,
+      applyWindow,
       laya: laya.error
         ? { error: laya.error }
         : { answers: laya.answers, elapsed_s: laya.elapsed_s ?? null },
@@ -1073,9 +1022,9 @@ export class TradeReview {
         } else {
           st.lastReview = record;
           st.lastReviewError = null;
-          // Anchor the next daily window. Only the scheduled daily pass (and the
-          // startup catch-up) moves it; a focused streak review does not.
-          if (daily) st.lastApplyReviewAt = until;
+          // Anchor the next apply window. Only the scheduled 4-hour pass (and
+          // the startup catch-up) moves it; a focused streak review does not.
+          if (applyWindow) st.lastApplyReviewAt = until;
         }
       },
       "review",

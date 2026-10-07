@@ -99,7 +99,7 @@ function costTitleFor(free) {
 // while public/ is re-read per request, so a frontend-only deploy otherwise
 // leaves the browser calling routes the running backend does not have - and a
 // 404 would be reported as "connection failed", which is misleading.
-const EXPECTED_BUILD = "3.6.2";
+const EXPECTED_BUILD = "3.7.0";
 let state = null,
   events = [],
   analyses = new Map(),
@@ -294,27 +294,6 @@ function renderReview(s) {
       )
       .join("");
     html += `<details class="laya-perf" open><summary>Laya performance · ${p.analyses} labels · ${p.matched}/${p.trips} trips joined</summary><p class="note">regime — ${dist(p.regime)}</p><p class="note">quality — ${dist(p.quality)}</p>${rows ? `<table><thead><tr><th>entry fit</th><th>n</th><th>wins</th><th>win rate</th><th>P/L</th></tr></thead><tbody>${rows}</tbody></table>` : ""}<p class="note">Join uses the most recent analysis for the product before the entry; approximate.</p></details>`;
-  }
-  // Timeframe Lab: the code-generated evidence behind any timeframe change.
-  if (r.timeframeLab?.arms) {
-    const arms = Object.entries(r.timeframeLab.arms);
-    const tfs = Object.keys(arms[0]?.[1]?.timeframes ?? {});
-    const head = tfs.map((t) => `<th>${esc(t)}</th>`).join("");
-    const body = arms
-      .map(([arm, e]) => {
-        const cells = tfs
-          .map((t) => {
-            const s = e.timeframes?.[t] ?? {};
-            return `<td class="${t === e.current ? "tf-current" : ""}" title="${esc(`${s.trades ?? 0} trades, ${s.wins ?? 0}W/${s.losses ?? 0}L${s.partial ? " (partial)" : ""}`)}">${s.net ?? "—"}%</td>`;
-          })
-          .join("");
-        return `<tr><th>${esc(arm)}</th>${cells}</tr>`;
-      })
-      .join("");
-    const hours = r.timeframeLab.since
-      ? Math.round((r.timeframeLab.until - r.timeframeLab.since) / 3600000)
-      : null;
-    html += `<details class="timeframe-lab"${r.timeframeLab.arms ? " open" : ""}><summary>Timeframe Lab · simulated${hours ? ` · ${hours}h` : ""}</summary><table><thead><tr><th>bot</th>${head}</tr></thead><tbody>${body}</tbody></table><p class="note">Net return per signal timeframe, simulated with the bot's own exits. A timeframe change is refused unless the proposed timeframe matches or beats the current one over a sufficient sample.</p></details>`;
   }
   if (r.proposals?.length)
     html += r.proposals

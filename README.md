@@ -8,7 +8,7 @@ submits real orders only when explicitly configured to.
 
 **How the system is meant to work — read [SYSTEM.md](SYSTEM.md) first.** It
 describes the recursive loop, the Laya/LLM roles, the two switches (decision
-engine and the hourly LLM review), and the safety invariants. It is the source of
+engine and the LLM review), and the safety invariants. It is the source of
 truth for the design.
 
 **Strategy v2:** automatic USDC discovery, speculative breakout Scout, trend-pullback
@@ -234,13 +234,14 @@ ledger switches it to real funds.
 
 The **Trade Review** runs on two cadences. **Hourly at `:00`** it collects data
 only: Laya reads the hour and the record is stored, with no LLM and no changes.
-**Daily at 06:00 local** the decision model reviews the accumulated day and is
-the only pass that applies changes: at most three proposals that adjust a bot's
-numeric strategy, a bot's rubric, **Laya's own question sets**, or the
-**strategy pool** (delete a losing template / add a new combination of a coded
-rule + universe + timeframe). The review judges Laya as well as the bots, using
-a table of Laya's label distribution and the win rate / P&L its pre-entry `fit`
-tracked.
+**Every 4 hours at local 00/04/08/12/16/20** the decision model reviews the
+hourly data collected since the last apply and is the only pass that applies
+changes: at most three proposals that adjust a bot's numeric strategy, a bot's
+rubric, **Laya's own question sets**, or the **strategy pool** (delete a losing
+template / add a new combination of a coded rule + universe + timeframe; a bot's
+own signal timeframe is fixed by its template and cannot change). The review
+judges Laya as well as the bots, using a table of Laya's label distribution and
+the win rate / P&L its pre-entry `fit` tracked.
 
 A proposal is applied only when it stays in scope (prose only — never risk
 numbers, capital, mode or code), is a **complete validated document** (a rubric
@@ -250,7 +251,7 @@ heads), and passes the evidence gate:
 - `laya.reviewQuestions` (the review's own questions) is **structural** and
   ungated — it cannot affect trading.
 - `rubric.*` and `laya.analysisQuestions` are **edge** changes: they need
-  `review.minSample` (**25** since 3.6.0) closed trades on the target arm.
+  `review.minSample` (**10** since 3.7.0) closed trades on the target arm.
 
 Applied changes are files under `/var/lib/beebots/overrides/`, feed `ruleHash`,
 and can be reverted individually. `review.minSample` and `review.autoApply` are

@@ -738,81 +738,23 @@ test("the LLM review keeps at most one proposal by default", async () => {
   }
 });
 
-test("a timeframe change is refused without supporting lab evidence", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "beebots-tfgate-"));
-  const store = new Store(":memory:", config());
-  try {
-    const reviewer = new TradeReview({
-      store,
-      laya: {},
-      model: {},
-      config: {},
-      dataDir: dir,
-    });
-    const p = (tf) => ({
+test("a signal-timeframe change is refused: the key is locked", () => {
+  const g = evaluateGate({
+    proposal: {
       target: "params.trend",
-      proposed: JSON.stringify({ timeframe: tf }),
-    });
-    assert.match(
-      reviewer.timeframeGate(p("5m"), null),
-      /No timeframe evidence/,
-    );
-    assert.match(
-      reviewer.timeframeGate(p("5m"), {
-        arms: {
-          trend: {
-            current: "15m",
-            timeframes: { "5m": { trades: 1, net: 0 } },
-          },
-        },
-      }),
-      /Insufficient timeframe evidence/,
-    );
-    assert.match(
-      reviewer.timeframeGate(p("5m"), {
-        arms: {
-          trend: {
-            current: "15m",
-            timeframes: {
-              "5m": { trades: 5, net: -2 },
-              "15m": { trades: 5, net: 3 },
-            },
-          },
-        },
-      }),
-      /underperforms/,
-    );
-    assert.equal(
-      reviewer.timeframeGate(p("5m"), {
-        arms: {
-          trend: {
-            current: "15m",
-            timeframes: {
-              "5m": { trades: 5, net: 4 },
-              "15m": { trades: 5, net: 3 },
-            },
-          },
-        },
-      }),
-      null,
-    );
-    assert.equal(
-      reviewer.timeframeGate(p("15m"), null),
-      null,
-      "no change, no gate",
-    );
-    assert.equal(
-      reviewer.timeframeGate({ target: "rubric.trend", proposed: "x" }, null),
-      null,
-    );
-  } finally {
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
+      proposed: JSON.stringify({ timeframe: "5m" }),
+    },
+    sample: {},
+  });
+  assert.equal(g.ok, false);
+  assert.ok(
+    g.reasons.some((r) => /fixed parameter/.test(r)),
+    JSON.stringify(g.reasons),
+  );
 });
 
-test("the review prompt and record carry the timeframe comparison", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "beebots-tfprompt-"));
+test("the review prompt carries no timeframe simulation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-notfprompt-"));
   const store = new Store(":memory:", config());
   try {
     const laya = {
@@ -833,16 +775,23 @@ test("the review prompt and record carry the timeframe comparison", async () => 
       dataDir: dir,
       reviewLlm: () => true,
     });
-    const lab = { generatedAt: 1, arms: { trend: { current: "15m" } } };
     const rec = await reviewer.run({
       since: 0,
       until: 3600000,
       coverage: null,
       autoApply: false,
-      timeframeLab: lab,
+      applyWindow: true,
+      hourly: [
+        {
+          until: 3600000,
+          laya: { answers: { exit_timing: { choice: "early" } } },
+        },
+      ],
     });
-    assert.ok(seen.includes("TIMEFRAME COMPARISON"));
-    assert.deepEqual(rec.timeframeLab, lab);
+    assert.ok(!seen.includes("TIMEFRAME COMPARISON"));
+    assert.ok(seen.includes("HOURLY DATA SINCE LAST APPLY"));
+    assert.equal(rec.timeframeLab, undefined);
+    assert.equal(rec.applyWindow, true);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -918,7 +867,7 @@ test("mergeProposal merges a partial patch onto the current target", () => {
     });
     const d = JSON.parse(m.proposed);
     assert.equal(d.riskPct, 0.8);
-    assert.ok("timeframe" in d, "other keys preserved");
+    assert.ok("stopPct" in d, "other keys preserved");
     const full = reviewer.currentFor("params.trend");
     const m2 = reviewer.mergeProposal({
       target: "params.trend",
@@ -928,12 +877,12 @@ test("mergeProposal merges a partial patch onto the current target", () => {
     // The model may return the patch as an inline object, not a JSON string.
     const m3 = reviewer.mergeProposal({
       target: "params.trend",
-      proposed: { strategy: "mean_reversion" },
+      proposed: { strategy: "hexchaser" },
     });
     assert.equal(typeof m3.proposed, "string", "object patch is stringified");
     const d3 = JSON.parse(m3.proposed);
-    assert.equal(d3.strategy, "mean_reversion");
-    assert.ok("timeframe" in d3, "other keys preserved");
+    assert.equal(d3.strategy, "hexchaser");
+    assert.ok("stopPct" in d3, "other keys preserved");
     // A rubric is a full document and is not merged.
     const r = reviewer.mergeProposal({
       target: "rubric.trend",
@@ -1140,7 +1089,7 @@ test("an hourly pass stores Laya's read and applies nothing", async () => {
   }
 });
 
-test("the daily review can delete and create strategy templates", () => {
+test("the review can delete and create strategy templates", () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-pool-"));
   const store = new Store(":memory:", config());
   const original = { ...getTemplates() };

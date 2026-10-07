@@ -181,7 +181,7 @@ test("review skips an hour already reviewed but retries a failed one", async () 
   const hour = Math.floor(Date.now() / 3600000) * 3600000;
   f.store.change(
     (st) => {
-      st.lastReview = { until: hour, summary: "ok" };
+      st.lastReview = { until: hour, summary: "ok", applyWindow: true };
       st.lastReviewError = null;
     },
     "test",
@@ -473,5 +473,32 @@ test("a losing streak triggers an immediate focused review", async () => {
     assert.equal(seen, null, "not re-triggered for the same streak");
   } finally {
     f.store.close();
+  }
+});
+
+test("effectiveRules pins the template timeframe even with a hostile override", () => {
+  const c = config();
+  const dir = mkdtempSync(join(tmpdir(), "beebots-tfpin-"));
+  c.dataDir = dir;
+  mkdirSync(join(dir, "overrides"), { recursive: true });
+  writeFileSync(
+    join(dir, "overrides", "params-breakout.json"),
+    JSON.stringify({ timeframe: "1h" }),
+  );
+  const store = new Store(":memory:", c);
+  try {
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: {},
+      laya: {},
+      model: {},
+    });
+    // Orakelia's template timeframe is 15m; the override cannot move it.
+    assert.equal(engine.effectiveRules("breakout").timeframe, "15m");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

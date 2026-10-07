@@ -1319,30 +1319,6 @@ footer {
   color: var(--muted);
   font-size: 10px;
 }
-#review .timeframe-lab {
-  margin: 6px 0;
-}
-#review .timeframe-lab table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 10px;
-}
-#review .timeframe-lab th,
-#review .timeframe-lab td {
-  border-bottom: 1px solid var(--line);
-  padding: 2px 4px;
-  text-align: right;
-}
-#review .timeframe-lab th:first-child {
-  text-align: left;
-}
-#review .timeframe-lab td.tf-current {
-  color: var(--green);
-  font-weight: 600;
-}
-#review .timeframe-lab summary {
-  cursor: pointer;
-}
 #review .laya-review {
   margin: 6px 0;
 }

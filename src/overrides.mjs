@@ -70,7 +70,7 @@ export const RUNTIME_SCHEMA = {
 // so existing stored overrides still parse, but they are excluded from the
 // tunable key lists (so they are never offered to the model and never appear in
 // CURRENT TARGETS) and validateOverride refuses any proposal that sets them.
-export const LOCKED_PARAMS = new Set(["maxCandidates"]);
+export const LOCKED_PARAMS = new Set(["maxCandidates", "timeframe"]);
 
 // Bots whose strategy template is pinned by the owner (none by default: any
 // review may rotate or adjust a bot's strategy). The mechanism is kept so an

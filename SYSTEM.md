@@ -62,8 +62,8 @@ and must never be coupled:
 1. **Decision stream** — the _engine_ selection in the dashboard
    (`jev`, `laya`, `llm`, `jev+llm`, `laya+llm`). `laya` means Laya decides and
    the LLM is not used for trades. This switch affects **trades only**.
-2. **Review** — the _"Use the LLM for the daily review"_ toggle
-   (`review.llm`, default **on**). This affects the **daily apply only**; the
+2. **Review** — the _"Use the LLM for the review"_ toggle
+   (`review.llm`, default **on**). This affects the **4-hourly apply only**; the
    hourly pass is always Laya-only data collection.
 
    Turning the LLM off for the decision stream (engine = `laya`) **must never**
@@ -74,7 +74,7 @@ and must never be coupled:
 
 Each bot runs one **strategy template** from a **dynamic pool**
 (`getTemplates()` in `strategy-v2.mjs`), selected by `params.<bot>.strategy`. A
-template is a **coded rule + universe + timeframe**; the daily review may delete
+template is a **coded rule + universe + timeframe**; the review may delete
 a losing one or add a new combination (`strategyPool` target), but it can never
 add a rule that is not coded. The initial pool:
 
@@ -101,7 +101,7 @@ The Trade Review may reassign a bot to a different template, and is **required**
 to do so when the bot is flagged: after **10 closed trades** and losing money,
 the review replaces the losing strategy rather than nudging it.
 Open positions are left to resolve; new entries use the new strategy.
-`maxCandidates` is never review-tunable. The **daily** pass may adjust or rotate
+`maxCandidates` is never review-tunable. The 4-hourly pass may adjust or rotate
 any bot's strategy and may edit the pool; no template is pinned.
 
 **Losing-streak trigger.** When a bot closes **5 trades in a row at a loss**, the
@@ -152,53 +152,44 @@ one and must **never** be keyed to the LLM engine id: the engine gate for it is
 "does this engine use Laya", not "is the engine `laya+llm`". An engine with no
 Laya (`llm`, `jev`, `jev+llm`) does not run it.
 
-## Timeframe evidence (the Timeframe Lab)
+## The signal timeframe is fixed
 
-A bot's signal timeframe (`timeframe`: 5m / 15m / 1h) is review-editable, but a
-timeframe change is never allowed on a hunch. Before each review, code re-runs
-each bot's **own strategy** (`evaluate`) over the candles already held, at every
-timeframe, and simulates the bot's **own exits** (protective stop, trailing stop,
-`maxHoldHours`) to produce, per arm per timeframe, the trades/wins/losses and net
-return over the window. This is the Timeframe Lab (`src/timeframe-lab.mjs`).
-
-- It is a **simulation** over closed bars (bid/ask approximated by the bar close),
-  bounded by a product cap, an evaluation cap and a time budget. A capped sample
-  is marked `partial`.
-- The review sees the table and must cite it. A `params.<arm>` proposal that
-  changes `timeframe` is **refused by code** unless the lab shows the proposed
-  timeframe with a sufficient sample (>= 3 trades, not partial) and a net return
-  at least the current timeframe's. The model cannot guess past this gate.
-- The lab is deterministic and side-effect free: no orders, no LLM.
+A bot's signal timeframe is set by its **template** and is **locked** (3.7.0):
+it is out of the tunable key list and `validateOverride` refuses any proposal
+that sets it. There is no Timeframe Lab any more - the simulation that used to
+gate timeframe changes is gone.
 
 ## The review pipeline (two cadences)
 
 The review runs on two schedules. **Hourly** at wall-clock `:00` it is a
 **data-collection pass**: Laya reviews the hour (Stage 1) and the record is
 stored in `hourlyReviews` (rolling, 48). **No LLM runs and no change is made.**
-**Daily at 06:00 local** (and once on startup if it has been >24 h) the **daily
-apply** runs: the LLM sees the accumulated hourly records as well as Laya's
-current read, and this is the **only** pass that applies changes.
+**Every 4 hours at local 00/04/08/12/16/20** (and once on startup if it has been
+>4 h) the **apply** pass runs: the LLM sees the hourly records collected since
+the last apply as well as Laya's current read, and this is the **only** pass
+that applies changes.
 
 **Stage 1 — Laya reviews the hour.** Laya reads the hour as text and answers a
 set of classified heads (the _review questions_). This always runs.
 
-**Stage 2 — the LLM reviews the day.** The model is handed **only Laya's
+**Stage 2 — the LLM reviews the window.** The model is handed **only Laya's
 answers** (never the raw hour) plus the per-arm scoreboard, the applied-change
 ledger, the current value of every editable target, and the allowed ranges. It
 may change:
 
 - a bot's **rubric** (the written strategy),
 - Laya's **review questions** (what Laya is asked to judge),
-- the bots' **numeric strategy** (entry gates, risk, cadence, signal timeframe,
-  Scout's universe categories) and the runtime knobs, and
+- the bots' **numeric strategy** (entry gates, risk, cadence, Scout's universe
+  categories) and the runtime knobs, and
 - the **strategy pool** (`strategyPool`): delete a losing template, or add a new
-  template by combining a coded rule with a universe and timeframe.
+  template by combining a coded rule with a universe and timeframe. The
+  **bot's** timeframe is fixed and cannot be changed.
 
 When the review toggle is off, or when the LLM stage cannot run, Stage 2 is
 Laya's self-tune instead. Either way the loop keeps improving.
 
 A **focused** review is still triggered immediately when a bot loses 5 in a row;
-it runs Stage 2 at once for that bot only and does not move the daily anchor.
+it runs Stage 2 at once for that bot only and does not move the apply anchor.
 
 ### Output budget (do not break this)
 
@@ -246,7 +237,7 @@ Every rubric must retain these, or the proposal is refused:
 - `src/strategy-v2.mjs` — the strategy, gates, execution plan.
 - `src/engines.mjs` — the engine catalogue and the action menu.
 - `src/engine.mjs` — the trading cycle, execution, protection.
-- `src/review.mjs` — the two-stage hourly review.
+- `src/review.mjs` — the two-stage review (hourly data, 4-hourly apply).
 - `src/self-tune.mjs`, `src/analysis-variants.mjs` — Laya's bounded self-tune.
 - `src/model.mjs`, `src/providers.mjs` — the optional LLM calls.
 - `src/overrides.mjs` — target whitelist, schemas, backup/revert.
