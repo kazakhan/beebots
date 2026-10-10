@@ -10,11 +10,12 @@ import { VARIANT_NAMES } from "./analysis-variants.mjs";
 
 const BOTS = ["breakout", "trend", "momentum"];
 
-// Loosening direction per bot (one step): make the gates easier to pass.
+// Loosening direction per bot (one step): make the gates easier to pass. The
+// keys are the ones each bot's pinned template actually reads (3.8.0).
 const LOOSEN = {
-  breakout: { rangeAtr: 0.5, relativeVolume: -0.25, maxExtensionAtr: 0.25 },
-  trend: { maxExtensionAtr: 0.25, pullbackBars: -1 },
-  momentum: { minBreadth: -1, topFraction: 0.05 },
+  breakout: { relativeVolume: -0.25, maxExtensionAtr: 0.25 },
+  trend: { maxExtensionAtr: 0.25, topFraction: 0.05 },
+  momentum: { rsiOversold: 5, maxExtensionAtr: 0.25 },
 };
 
 export function selfTune({ answers = {}, current = () => ({}) } = {}) {

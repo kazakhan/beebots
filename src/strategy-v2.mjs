@@ -10,21 +10,37 @@ export const VERSION = "2.0.0";
 export const STRATEGY_RULES = {
   hexchaser: "7-day momentum leaders",
   orakelia: "7-day momentum + rising price & volume",
+  connors_thorp: "Structural pullback mean reversion in a trend (RSI)",
+  breakout_liquid: "Range breakout on liquid coins",
   market_mover: "Top-20 market-cap accumulation",
   trend_pullback: "Trend pullback (Keeper)",
 };
 // The initial template pool; id -> spec. `universe` is all | top100 | top20.
 export const BUILTIN_TEMPLATES = {
-  hexchaser: {
-    label: "Hexchaser (7d momentum leader)",
-    rule: "hexchaser",
-    universe: "all",
+  orakelia: {
+    label: "Orakelia (7d momentum + volume, liquid)",
+    rule: "orakelia",
+    universe: "top100",
     timeframe: "15m",
     count: 3,
   },
-  orakelia: {
-    label: "Orakelia (7d momentum + volume)",
-    rule: "orakelia",
+  connors_thorp: {
+    label: "ConnorsThorp (pullback mean reversion, liquid)",
+    rule: "connors_thorp",
+    universe: "top100",
+    timeframe: "15m",
+    count: 3,
+  },
+  breakout_liquid: {
+    label: "Breakout (liquid)",
+    rule: "breakout_liquid",
+    universe: "top100",
+    timeframe: "15m",
+    count: 3,
+  },
+  hexchaser: {
+    label: "Hexchaser (7d momentum leader)",
+    rule: "hexchaser",
     universe: "all",
     timeframe: "15m",
     count: 3,
@@ -64,9 +80,9 @@ export function resolveTemplate(strat) {
   return POOL[strat] ?? BUILTIN_TEMPLATES[strat] ?? null;
 }
 export const DEFAULT_STRATEGY = {
-  breakout: "orakelia",
-  trend: "market_mover",
-  momentum: "hexchaser",
+  breakout: "breakout_liquid",
+  trend: "orakelia",
+  momentum: "connors_thorp",
 };
 // Milliseconds per signal timeframe, shared so the collector's interval and the
 // signal time evaluate stamps always agree with the chosen template.
@@ -93,6 +109,29 @@ export const TEMPLATE_DEFAULTS = {
     topFraction: 0.2,
     minBreadth: 10,
     relativeVolume: 1,
+    // Exit when relative volume falls below this floor (the "volume drops"
+    // half of Orakelia's exit rule).
+    volumeFloor: 1,
+    // After a fade exit, block re-entry on that coin for this many hours.
+    pauseHours: 4,
+  },
+  connors_thorp: {
+    maxExtensionAtr: 0.75,
+    minSignalBars: 20,
+    pullbackBars: 5,
+    rsiPeriod: 14,
+    rsiOversold: 30,
+    rsiNeutral: 50,
+    rewardRisk: 1.5,
+    topFraction: 0.2,
+    minBreadth: 10,
+  },
+  breakout_liquid: {
+    rangeBars: 24,
+    relativeVolume: 1.5,
+    maxExtensionAtr: 1,
+    minSignalBars: 20,
+    pullbackBars: 5,
   },
   market_mover: { maxExtensionAtr: 0.5, minSignalBars: 4, minBreadth: 1 },
   momentum_leaders: {
@@ -140,78 +179,69 @@ export const TEMPLATE_DEFAULTS = {
 };
 export const defaults = {
   breakout: {
-    strategy: "orakelia",
+    strategy: "breakout_liquid",
     rangeBars: 24,
-    // Loosened in 2.3.0. The live coverage panel showed genuine breakouts held
-    // back by four independent edges at once: compressionAtr 4.13-5.30 against a
-    // 4.0 limit, and completed breakouts rejected only for being past the
-    // 0.5-ATR extension cap (USELESS, PNUT). relativeVolume was never the
-    // constraint - the same candidates ran 8x-43x against a 2x threshold.
     rangeAtr: 6,
     relativeVolume: 2,
-    maxExtensionAtr: 2,
+    maxExtensionAtr: 1,
     riskPct: 1,
-    // Meme pairs have wide spreads and thin books; 0.2 vetoed most candidates at
-    // the execution-cost check.
     maxCostRisk: 0.4,
-    // The protective stop / trailing / time exits are percentage-based and shared
-    // with the control arm (3.6.0); size = riskPct / stopPct.
+    // Percentage stop + trailing + time stop, shared with the other arms.
     stopPct: 3,
     trailPct: 3,
-    trailActivationPct: 3,
-    maxHoldHours: 48,
+    trailActivationPct: 4,
+    maxHoldHours: 24,
     trailAtr: 2,
     trailR: 2,
-    // Shared Keeper core (3.3.8): the pullback window, measured on the signal
-    // timeframe, then Scout's own range-breakout trigger.
-    pullbackBars: 15,
-    // Defaults are the starting point; the Trade Review tunes them (bounded by
-    // the override schema). Scout scans every tradeable market, meme and new
-    // listings ranked first.
-    timeframe: "5m",
-    minSignalBars: 120,
+    pullbackBars: 5,
+    // Scout breaks out of liquid (top-100) ranges on the 15m signal frame.
+    timeframe: "15m",
+    minSignalBars: 20,
     cadenceMs: 300000,
     maxCandidates: 25,
     categories: ["meme", "speculative", "unclassified"],
   },
   trend: {
-    strategy: "market_mover",
+    strategy: "orakelia",
+    topFraction: 0.2,
+    minBreadth: 10,
     pullbackBars: 5,
     maxExtensionAtr: 0.5,
     riskPct: 1,
     maxCostRisk: 0.2,
     stopPct: 3,
-    trailPct: 3,
-    trailActivationPct: 3,
+    // Keeper lets a winner run: a wider trail than the old harmful 2-3%.
+    trailPct: 4,
+    trailActivationPct: 6,
     maxHoldHours: 48,
     trailAtr: 3,
     trailR: 2,
-    // Keeper is a day trader: a 15-minute signal on the 4-hour trend context.
+    // Keeper is a day trader: a 15-minute signal on the 1-hour trend context.
     timeframe: "15m",
-    minSignalBars: 60,
+    minSignalBars: 4,
     cadenceMs: 300000,
     maxCandidates: 25,
   },
   momentum: {
-    strategy: "hexchaser",
+    strategy: "connors_thorp",
     topFraction: 0.2,
     minBreadth: 10,
-    riskPct: 1,
+    pullbackBars: 5,
+    maxExtensionAtr: 0.75,
+    // Half-Kelly is computed per entry from the arm's realised win rate and
+    // capped at 5% account risk (see Engine.effectiveRules). tradeFraction keeps
+    // three positions affordable.
+    riskPct: 1.5,
     maxCostRisk: 0.2,
     stopPct: 3,
-    trailPct: 3,
+    trailPct: 2,
     trailActivationPct: 3,
     maxHoldHours: 48,
     trailAtr: 2.5,
     trailR: 2,
-    // The shared trigger reads maxExtensionAtr; without it maxEntry is NaN and
-    // every Spark setup is rejected as "Move already extended".
-    maxExtensionAtr: 0.5,
-    // Shared Keeper core (3.3.8): the pullback window, then Spark's momentum
-    // trigger and top-quintile ranking.
-    pullbackBars: 5,
+    tradeFraction: 0.33,
     timeframe: "15m",
-    minSignalBars: 4,
+    minSignalBars: 20,
     cadenceMs: 300000,
     maxCandidates: 25,
   },
@@ -240,6 +270,22 @@ export function atr(rows, n = 14) {
       ),
     );
   return tr.slice(-n).reduce((a, x) => a + x, 0) / n;
+}
+// Wilder's RSI over the last `n` closes. Returns null when there is not enough
+// history. Used by the ConnorsThorp mean-reversion template.
+export function rsi(xs, n = 14) {
+  if (!Array.isArray(xs) || xs.length < n + 1) return null;
+  let gain = 0,
+    loss = 0;
+  for (let i = xs.length - n; i < xs.length; i++) {
+    const d = xs[i] - xs[i - 1];
+    if (d >= 0) gain += d;
+    else loss -= d;
+  }
+  const ag = gain / n,
+    al = loss / n;
+  if (al === 0) return 100;
+  return 100 - 100 / (1 + ag / al);
 }
 export function aggregate(rows, seconds) {
   const groups = new Map();
@@ -438,6 +484,42 @@ export function evaluate(id, frames, rules, membership) {
     f.rotation = true;
     f.rankScore = 0;
     f.rankTime = h.at(-1).time + 3600000;
+  } else if (strat === "connors_thorp") {
+    // ConnorsThorp: buy a structural pullback within a 1h uptrend when RSI is
+    // oversold; the exit (RSI back to neutral or the trailing stop) is code.
+    if ((h?.length ?? 0) < 60 || bars.length < (Number(r.minSignalBars) || 20))
+      throw Error("Connors-Thorp history warming");
+    const { a, stop } = trendCore(f, h, prior, r, fail);
+    const closes = [...prior.map((x) => x.close), close];
+    f.rsi = rsi(closes, Number(r.rsiPeriod) || 14);
+    fail(
+      Number.isFinite(f.rsi) && f.rsi < (Number(r.rsiOversold) || 30),
+      "RSI not oversold",
+    );
+    fail(close > prior.at(-1).close, "No reversion close");
+    f.stopPrice = stop;
+    fail(close - f.stopPrice <= 3 * a, "Reversion stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = f.ema20 / f.ema50;
+  } else if (strat === "breakout_liquid") {
+    // Breakout on liquid coins: a completed close above the pre-breakout range
+    // on a relative-volume surge, within an uptrend context.
+    const minBars = Number(r.minSignalBars) || 20;
+    if (bars.length < Math.max(minBars, 15) || (h?.length ?? 0) < 60)
+      throw Error("Breakout history warming");
+    const { a, stop } = trendCore(f, h, prior, r, fail);
+    const range = prior.slice(-r.rangeBars),
+      vols = range.map((x) => x.volume);
+    f.channelHigh = Math.max(...range.map((x) => x.high));
+    f.channelLow = Math.min(...range.map((x) => x.low));
+    const med = median(vols);
+    f.relativeVolume = med > 0 ? last.volume / med : 0;
+    fail(close > f.channelHigh, "No completed breakout close");
+    fail(f.relativeVolume >= r.relativeVolume, "Relative volume insufficient");
+    f.stopPrice = stop;
+    fail(close - f.stopPrice <= 3 * a, "Breakout stop too distant");
+    f.maxEntry = close + r.maxExtensionAtr * a;
+    f.rankScore = close / f.channelHigh;
   } else if (strat === "market_mover") {
     // Market Mover: accumulate the largest top-20 coins and hold. The collector
     // restricts its universe; here we only avoid buying an established downtrend.
@@ -606,7 +688,14 @@ export function rankMomentum(
   rules = {},
   { count = null, keys = ["momentum24hPct", "momentum7dPct"] } = {},
 ) {
-  const r = { ...defaults.momentum, ...rules };
+  // Ranking knobs default here, not from the bot defaults, so momentum ranking
+  // still works when a bot's own defaults omit them (e.g. ConnorsThorp).
+  const r = {
+    topFraction: 0.2,
+    minBreadth: 10,
+    ...defaults.momentum,
+    ...rules,
+  };
   // Rank only the same completed hour, never mix stale and new intervals.
   const latest = Math.max(0, ...rows.map((x) => x.rankTime));
   const cohort = rows.filter((x) => x.rankTime === latest);

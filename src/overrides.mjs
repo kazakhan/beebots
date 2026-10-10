@@ -37,8 +37,14 @@ export const PARAM_SCHEMA = {
   rangeBars: { min: 5, max: 200, int: true },
   rangeAtr: { min: 0.5, max: 20 },
   relativeVolume: { min: 0.5, max: 10 },
+  volumeFloor: { min: 0.1, max: 5 },
   maxExtensionAtr: { min: 0, max: 10 },
   pullbackBars: { min: 1, max: 20, int: true },
+  rsiPeriod: { min: 2, max: 50, int: true },
+  rsiOversold: { min: 5, max: 50 },
+  rsiNeutral: { min: 30, max: 80 },
+  rewardRisk: { min: 0.5, max: 5 },
+  pauseHours: { min: 0, max: 168, int: true },
   topFraction: { min: 0.05, max: 1 },
   minBreadth: { min: 1, max: 100, int: true },
   riskPct: { min: 0.1, max: 3 },
@@ -72,10 +78,10 @@ export const RUNTIME_SCHEMA = {
 // CURRENT TARGETS) and validateOverride refuses any proposal that sets them.
 export const LOCKED_PARAMS = new Set(["maxCandidates", "timeframe"]);
 
-// Bots whose strategy template is pinned by the owner (none by default: any
-// review may rotate or adjust a bot's strategy). The mechanism is kept so an
-// owner can pin a bot again.
-export const PINNED_STRATEGY_BOTS = new Set();
+// Bots whose strategy template is pinned by the owner (3.8.0): the three bots
+// run fixed templates and the review may only tune their numeric params. The
+// mechanism is kept so an owner can unpin or re-pin.
+export const PINNED_STRATEGY_BOTS = new Set(["breakout", "trend", "momentum"]);
 export function strategyPinned(target) {
   return (
     typeof target === "string" &&

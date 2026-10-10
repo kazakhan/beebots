@@ -218,7 +218,7 @@ test("effectiveRules pins maxCandidates to 100 even with a hostile override", ()
   c.dataDir = dir;
   mkdirSync(join(dir, "overrides"), { recursive: true });
   writeFileSync(
-    join(dir, "overrides", "params-momentum.json"),
+    join(dir, "overrides", "params-breakout.json"),
     JSON.stringify({ maxCandidates: 6, riskPct: 1.2 }),
   );
   const store = new Store(":memory:", c);
@@ -231,7 +231,7 @@ test("effectiveRules pins maxCandidates to 100 even with a hostile override", ()
       laya: {},
       model: {},
     });
-    const rules = engine.effectiveRules("momentum");
+    const rules = engine.effectiveRules("breakout");
     assert.equal(rules.maxCandidates, 100, "pinned");
     assert.equal(rules.riskPct, 1.2, "other stored values still apply");
   } finally {
@@ -390,7 +390,7 @@ test("a rotation position is not sold just for leaving the leader set", () => {
   }
 });
 
-test("effectiveRules honours a stored strategy override", () => {
+test("effectiveRules pins the strategy for the three bots", () => {
   const c = config();
   const dir = mkdtempSync(join(tmpdir(), "beebots-pinrules-"));
   c.dataDir = dir;
@@ -410,9 +410,10 @@ test("effectiveRules honours a stored strategy override", () => {
       model: {},
     });
     const b = engine.effectiveRules("breakout");
-    assert.equal(b.strategy, "orakelia", "the override applies");
+    assert.equal(b.strategy, "breakout_liquid", "the pinned template wins");
     assert.equal(b.riskPct, 1.2, "other params still apply");
-    assert.equal(engine.effectiveRules("trend").strategy, "market_mover");
+    assert.equal(engine.effectiveRules("trend").strategy, "orakelia");
+    assert.equal(engine.effectiveRules("momentum").strategy, "connors_thorp");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -500,5 +501,95 @@ test("effectiveRules pins the template timeframe even with a hostile override", 
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("effectiveRules gives ConnorsThorp a Half-Kelly risk with a position cap", () => {
+  const c = config();
+  const store = new Store(":memory:", c);
+  try {
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: {},
+      laya: {},
+      model: {},
+    });
+    const r = engine.effectiveRules("momentum");
+    // p=0.5, b=1.5 -> full Kelly 1/6, half ~8.3%, capped at 5% account risk.
+    assert.equal(r.riskPct, 5);
+    assert.ok(
+      r.tradeFraction <= 1 / 3 + 1e-9,
+      "keeps three positions affordable",
+    );
+    assert.equal(engine.effectiveRules("trend").strategy, "orakelia");
+  } finally {
+    store.close();
+  }
+});
+
+test("ruleExit fades Orakelia when momentum turns and pauses the coin", () => {
+  const c = config();
+  const store = new Store(":memory:", c);
+  try {
+    const market = {
+      snapshot: () => [
+        {
+          product: "X-USDC",
+          momentum7dPct: -1,
+          momentum24hPct: 2,
+          relativeVolume: 2,
+        },
+      ],
+    };
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market,
+      laya: {},
+      model: {},
+    });
+    const r = engine.ruleExit("trend", { product: "X-USDC" });
+    assert.equal(r.reason, "Momentum faded");
+    assert.equal(r.pause, true);
+
+    const rsi = {
+      snapshot: () => [{ product: "X-USDC", rsi: 55 }],
+    };
+    const e2 = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: rsi,
+      laya: {},
+      model: {},
+    });
+    const r2 = e2.ruleExit("momentum", { product: "X-USDC" });
+    assert.equal(r2.reason, "RSI returned to neutral");
+    assert.equal(r2.pause, false);
+  } finally {
+    store.close();
+  }
+});
+
+test("a rule exit can pause a coin from re-entry", () => {
+  const c = config();
+  const store = new Store(":memory:", c);
+  try {
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: {},
+      laya: {},
+      model: {},
+    });
+    assert.equal(engine.pausedProducts("trend").has("X-USDC"), false);
+    engine.pauseProduct("trend", "X-USDC");
+    assert.equal(engine.pausedProducts("trend").has("X-USDC"), true);
+  } finally {
+    store.close();
   }
 });

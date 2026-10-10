@@ -11,8 +11,9 @@ describes the recursive loop, the Laya/LLM roles, the two switches (decision
 engine and the LLM review), and the safety invariants. It is the source of
 truth for the design.
 
-**Strategy v2:** automatic USDC discovery, speculative breakout Scout, trend-pullback
-Keeper and cross-market momentum Spark. See [v2 release and migration](deploy/UPGRADE-V2.md).
+**Strategy v2:** three pinned liquid templates — Breakout Scout, Orakelia Keeper
+(7d momentum with a fade exit) and ConnorsThorp Spark (pullback mean reversion in
+a trend). See [v2 release and migration](deploy/UPGRADE-V2.md).
 The original v1 runtime/config remain compatible for existing positions and tests;
 the paragraphs below describe the initial deployment where they mention a fixed universe.
 

@@ -42,7 +42,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.7.0";
+const BUILD = "3.8.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -203,10 +203,14 @@ export class Engine {
   // is ignored rather than trusted.
   effectiveRules(id) {
     const over = readJsonOverride(this.config.dataDir, `params.${id}`, null);
-    const strat =
-      over?.strategy ??
-      this.config.bots?.[id]?.strategy ??
-      STRATEGY_DEFAULTS[id]?.strategy;
+    // A pinned bot's strategy template is fixed by the owner; the default is
+    // enforced even if a stored override (or the review) named another.
+    const pinned = PINNED_STRATEGY_BOTS.has(id);
+    const strat = pinned
+      ? DEFAULT_STRATEGY[id]
+      : (over?.strategy ??
+        this.config.bots?.[id]?.strategy ??
+        STRATEGY_DEFAULTS[id]?.strategy);
     const template = resolveTemplate(strat);
     const base = {
       ...(STRATEGY_DEFAULTS[id] ?? {}),
@@ -218,6 +222,7 @@ export class Engine {
     };
     if (over && !validateParams(`params.${id}`, over))
       Object.assign(base, over);
+    base.strategy = strat;
     // Fixed structural cap: the review must never change it. Pin it even if a
     // stored override carries a value (the key is locked out of the tunables).
     base.maxCandidates = 100;
@@ -225,9 +230,25 @@ export class Engine {
     // of the tunables and cannot be moved off the template by config or an
     // override.
     if (template?.timeframe) base.timeframe = template.timeframe;
-    // The owner pinned these bots' strategy templates; the default is enforced
-    // even if a stored override (or the review) named another.
-    if (PINNED_STRATEGY_BOTS.has(id)) base.strategy = DEFAULT_STRATEGY[id];
+    // Half-Kelly capital allocation for ConnorsThorp (3.8.0): risk per entry is
+    // half the Kelly fraction from the arm's realised win rate, capped at 5% of
+    // the account. Falls back to a 0.5 win rate (which the 5% cap then bounds).
+    if (template?.rule === "connors_thorp") {
+      const perf = this.store.read().bots?.[id]?.performance ?? {};
+      const wins = Number(perf.wins) || 0,
+        losses = Number(perf.losses) || 0;
+      const p = wins + losses > 0 ? wins / (wins + losses) : 0.5;
+      const b = Number(base.rewardRisk) || 1.5;
+      const kelly = (p * (b + 1) - 1) / b;
+      base.riskPct = Math.min(5, Math.max(0.1, (Math.max(0, kelly) / 2) * 100));
+      // Keep three positions affordable: never allocate more than 1/maxPositions
+      // of cash to a single entry.
+      const slots = Number(base.maxPositions) || 3;
+      base.tradeFraction = Math.min(
+        Number(base.tradeFraction) || 1,
+        1 / Math.max(1, slots),
+      );
+    }
     return base;
   }
   // Runtime-wide knobs the review may tune. Defaults are the pre-review values.
@@ -335,6 +356,7 @@ export class Engine {
       "turnover24h",
       "atr",
       "relativeVolume",
+      "rsi",
       "compressionAtr",
       "rankPercentile",
       "breadth",
@@ -931,10 +953,17 @@ export class Engine {
             runtime.reentryLookbackBars,
           );
           // The decision only sees a bounded subset (analysis may have 100).
+          // Products in a post-exit pause window are kept out of the BUY menu
+          // (held products are always kept).
+          const paused = this.pausedProducts(id);
           const decisionCandidates = this.decisionSubset(
             id,
             analyzed,
             positions,
+          ).filter(
+            (c) =>
+              positions.some((p) => p.product === c.product) ||
+              !paused.has(c.product),
           );
           const day = new Date().toISOString().slice(0, 10);
           let d;
@@ -1662,6 +1691,7 @@ export class Engine {
             // One order in flight per bot: an unresolved exit blocks the rest
             // until it reconciles, so positions are worked off sequentially.
             if (this.store.pending().some((o) => o.bot === id)) continue;
+            let snap = null;
             for (const p of positions) {
               const q = await this.market.quote(p.product),
                 entry = Number(p.cost) / Number(p.quantity);
@@ -1690,16 +1720,22 @@ export class Engine {
               const expired =
                 p.maxHoldHours > 0 &&
                 Date.now() - p.opened > p.maxHoldHours * 3600000;
-              if (hard || trailing || expired) {
+              const rule = hard
+                ? null
+                : this.ruleExit(id, p, (snap ??= this.market.snapshot(id)));
+              if (hard || rule || trailing || expired) {
+                if (rule?.pause) this.pauseProduct(id, p.product);
                 await this.execute(
                   id,
                   "SELL",
                   p.product,
                   hard
                     ? "Protective stop"
-                    : trailing
-                      ? "Trailing exit"
-                      : "Maximum holding time",
+                    : rule
+                      ? rule.reason
+                      : trailing
+                        ? "Trailing exit"
+                        : "Maximum holding time",
                 );
                 break;
               }
@@ -1780,6 +1816,61 @@ export class Engine {
     )
       return "Relative momentum deteriorated";
     return null;
+  }
+  // Rule-based code exits for the assigned-template strategies (3.8.0). These
+  // are deterministic (never the decider's call) and run on the shared
+  // percentage-stop path, so a position with no policy is still exited when its
+  // thesis breaks:
+  //   orakelia      - momentum fades (7d or 24h turns <= 0) or volume drops.
+  //   connors_thorp - RSI returns to neutral.
+  // The reason string ends with "pause" semantics when the coin should be left
+  // alone for a while (Orakelia's "stop trading that coin until signals return").
+  ruleExit(id, p, snap = null) {
+    const rules = this.effectiveRules(id);
+    const template = resolveTemplate(rules.strategy);
+    const rule = template?.rule ?? rules.strategy;
+    const rows = snap ?? this.market.snapshot(id);
+    const f = rows.find((x) => x.product === p.product);
+    if (!f) return null;
+    if (rule === "orakelia") {
+      if (Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0)
+        return { reason: "Momentum faded", pause: true };
+      const floor = Number(rules.volumeFloor) || 1;
+      if (Number(f.relativeVolume) < floor)
+        return { reason: "Volume dropped", pause: true };
+    }
+    if (rule === "connors_thorp") {
+      const neutral = Number(rules.rsiNeutral) || 50;
+      if (Number.isFinite(f.rsi) && f.rsi >= neutral)
+        return { reason: "RSI returned to neutral", pause: false };
+    }
+    return null;
+  }
+  // Products a bot is paused from re-entering (set by a rule exit). Until the
+  // window passes, they are kept out of the BUY menu.
+  pausedProducts(id) {
+    const now = Date.now();
+    const pauses = this.store.read().bots?.[id]?.pauses ?? {};
+    const set = new Set();
+    for (const [product, until] of Object.entries(pauses))
+      if (Number(until) > now) set.add(product);
+    return set;
+  }
+  pauseProduct(id, product) {
+    const hours = Number(this.effectiveRules(id).pauseHours);
+    const until = Date.now() + (Number.isFinite(hours) ? hours : 4) * 3600000;
+    this.store.change(
+      (s) => {
+        s.bots[id].pauses ??= {};
+        s.bots[id].pauses[product] = until;
+        // Drop expired entries so the map cannot grow without bound.
+        const now = Date.now();
+        for (const [k, v] of Object.entries(s.bots[id].pauses))
+          if (Number(v) <= now) delete s.bots[id].pauses[k];
+      },
+      "pause",
+      { bot: id, product, until },
+    );
   }
   snapshot() {
     const s = this.store.read();

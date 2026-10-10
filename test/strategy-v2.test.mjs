@@ -15,6 +15,8 @@ import {
   getTemplates,
   setTemplates,
   resolveTemplate,
+  rsi,
+  BUILTIN_TEMPLATES,
 } from "../src/strategy-v2.mjs";
 import { migrateConfig } from "../src/migrate-v2.mjs";
 import { validate } from "../src/config.mjs";
@@ -391,7 +393,7 @@ test("Scout uses a prior range and rejects chasing (any category)", () => {
   const f = evaluate(
     "breakout",
     scoutFrame(),
-    { strategy: "range_breakout" },
+    { strategy: "range_breakout", timeframe: "5m" },
     { category: "meme" },
   );
   assert.equal(f.channelHigh, 100.5);
@@ -895,10 +897,15 @@ function scoutFrame({
 }
 const meme = { category: "meme" };
 const scout = (f, rules = defaults.breakout) =>
-  evaluate("breakout", f, { ...rules, strategy: "range_breakout" }, meme);
+  evaluate(
+    "breakout",
+    f,
+    { ...rules, strategy: "range_breakout", timeframe: "5m" },
+    meme,
+  );
 
 test("Scout shares Keeper's core, with its own breakout trigger", () => {
-  assert.equal(defaults.breakout.pullbackBars, 15);
+  assert.equal(defaults.breakout.pullbackBars, 5);
   const f = scout(scoutFrame());
   assert.equal(f.setupEligible, true);
   assert.deepEqual(f.reasons, []);
@@ -986,7 +993,7 @@ test("a bot runs the strategy template it is assigned", () => {
   const asBreakout = evaluate(
     "trend",
     scoutFrame(),
-    { strategy: "range_breakout" },
+    { strategy: "range_breakout", timeframe: "5m" },
     meme,
   );
   assert.equal(asBreakout.setupEligible, true);
@@ -998,9 +1005,9 @@ test("a bot runs the strategy template it is assigned", () => {
 });
 
 test("defaults carry a strategy template for every bot", () => {
-  assert.equal(defaults.breakout.strategy, "orakelia");
-  assert.equal(defaults.trend.strategy, "market_mover");
-  assert.equal(defaults.momentum.strategy, "hexchaser");
+  assert.equal(defaults.breakout.strategy, "breakout_liquid");
+  assert.equal(defaults.trend.strategy, "orakelia");
+  assert.equal(defaults.momentum.strategy, "connors_thorp");
 });
 
 test("the rotation ranking keeps only the top-3 leaders", () => {
@@ -1131,4 +1138,89 @@ test("setTemplates makes a created template live and prunes the listing", () => 
   } finally {
     setTemplates(original);
   }
+});
+
+test("rsi returns Wilder's RSI and null when history is short", () => {
+  assert.equal(rsi([1, 2, 3, 4]), null);
+  assert.equal(rsi(Array.from({ length: 16 }, (_, i) => i + 1)), 100);
+  // A monotonically falling series is fully oversold.
+  const down = Array.from({ length: 20 }, (_, i) => 100 - i);
+  assert.equal(rsi(down), 0);
+});
+
+test("the liquid templates scan the top-100 universe", () => {
+  assert.equal(BUILTIN_TEMPLATES.orakelia.universe, "top100");
+  assert.equal(BUILTIN_TEMPLATES.connors_thorp.universe, "top100");
+  assert.equal(BUILTIN_TEMPLATES.breakout_liquid.universe, "top100");
+  assert.equal(BUILTIN_TEMPLATES.orakelia.rule, "orakelia");
+  assert.equal(BUILTIN_TEMPLATES.connors_thorp.rule, "connors_thorp");
+  assert.equal(BUILTIN_TEMPLATES.breakout_liquid.rule, "breakout_liquid");
+});
+
+test("connors_thorp computes RSI on the signal frame and gates on it", () => {
+  // A 15m series: a long rise, then a sustained pullback (RSI oversold).
+  const series = [];
+  for (let i = 0; i < 220; i++) series.push(100 + i * 0.2);
+  for (let i = 0; i < 14; i++) series.push(144 - i * 0.4);
+  // Expand each 15m close into three 5m closes that aggregate back exactly.
+  const five = [];
+  series.forEach((close, i) => {
+    for (let j = 0; j < 3; j++)
+      five.push({
+        time: i * 900000 + j * 300000,
+        open: close,
+        high: close + 0.05,
+        low: close - 0.05,
+        close,
+        volume: 1,
+      });
+  });
+  const f = evaluate(
+    "momentum",
+    { five, hour: risingHour(), four: [] },
+    { strategy: "connors_thorp" },
+    meme,
+  );
+  assert.ok(Number.isFinite(f.rsi), "RSI computed");
+  assert.ok(f.rsi < 30, `oversold RSI, got ${f.rsi}`);
+  assert.ok(!f.reasons.includes("RSI not oversold"));
+  // A rising series is not oversold and is refused on that reason.
+  const hot = evaluate(
+    "momentum",
+    {
+      five: risingHour().flatMap((b, i) =>
+        [0, 1, 2].map((j) => ({
+          time: i * 900000 + j * 300000,
+          open: b.close,
+          high: b.close + 0.05,
+          low: b.close - 0.05,
+          close: b.close,
+          volume: 1,
+        })),
+      ),
+      hour: risingHour(),
+      four: [],
+    },
+    { strategy: "connors_thorp" },
+    meme,
+  );
+  assert.ok(hot.reasons.includes("RSI not oversold"));
+});
+
+test("breakout_liquid takes a range breakout on a volume surge", () => {
+  const f = evaluate(
+    "breakout",
+    scoutFrame(),
+    { strategy: "breakout_liquid", timeframe: "5m" },
+    meme,
+  );
+  assert.equal(f.setupEligible, true, JSON.stringify(f.reasons));
+  assert.ok(f.channelHigh > 0);
+  const thin = evaluate(
+    "breakout",
+    scoutFrame({ lastVolume: 1 }),
+    { strategy: "breakout_liquid", timeframe: "5m" },
+    meme,
+  );
+  assert.equal(thin.setupEligible, false);
 });

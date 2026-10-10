@@ -14,6 +14,48 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.8.0] - 2026-10-07 - Pinned faithful strategies, code exits, Half-Kelly
+
+The review had churned the bots (49 applied changes: rotating strategies and
+tightening trails) and every arm performed like the random control. This release
+pins three faithful strategies, restores the code exits that give them their
+edge, and tames the review.
+
+### Added
+
+- **Orakelia (Keeper)** rebuilt with its real rules: strongest 7-day momentum in
+  the **top-100 liquid** universe, bought while price **and** volume rise, with a
+  **code exit** on a momentum fade or volume drop and a **per-coin pause**
+  (`pauseHours`, default 4) before it can be re-bought. Paused coins are kept out
+  of the BUY menu.
+- **ConnorsThorp (Spark)**: a structural pullback in a 1h uptrend with **RSI(14)
+  oversold**; **code exit** when RSI returns to neutral or the trailing stop;
+  sized by **Half-Kelly** (win rate x payoff 1.5), capped at 5% account risk and
+  1/maxPositions of cash. `rsi()` added to the strategy library.
+- **Breakout (Scout)**: a completed close above the 24-bar range high on a
+  relative-volume surge, within an uptrend context, on the top-100 universe.
+- **Pinned strategies.** `PINNED_STRATEGY_BOTS` = the three bots; `strategyPinned`
+  refuses any proposal that changes a pinned bot's strategy and `effectiveRules`
+  enforces the pin. The review may still tune numeric params.
+
+### Changed
+
+- **Code rule exits return** for the assigned templates: Orakelia's fade/volume
+  exit and ConnorsThorp's RSI-neutral exit, evaluated by `Engine.ruleExit` on the
+  shared percentage-stop path. This reverses the 3.6.0 "stop/trail only" rule for
+  these templates (the trailing stop is kept). The decider is still HOLD-only.
+- Trails widened to stop cutting winners: Keeper 6%/4%, Scout 4%/3%, Spark 3%/2%.
+- New schema keys for the new rules (`rsiPeriod`, `rsiOversold`, `rsiNeutral`,
+  `rewardRisk`, `volumeFloor`, `pauseHours`) and updated self-tune steps.
+
+### Verification
+
+- 311 Node tests pass, up from 304: RSI, the two new rule branches, the
+  top-100 liquid templates, `ruleExit` (fade + RSI), the per-coin pause,
+  Half-Kelly sizing with the position cap, and the pinned-strategy refusals.
+
+---
+
 ## [3.7.0] - 2026-10-05 - 4-hourly LLM apply, Timeframe Lab removed, timeframe fixed
 
 ### Changed

@@ -138,19 +138,21 @@ test("strategy is a tunable enum of the pool", () => {
   assert.match(validateParams("params.trend", { strategy: "nope" }), /one of/);
 });
 
-test("any bot's strategy can be proposed (none pinned)", () => {
-  assert.equal(
+test("a pinned bot's strategy cannot be proposed", () => {
+  assert.match(
     validateOverride("params.breakout", '{"strategy":"orakelia"}'),
-    null,
+    /fixed for this bot/,
   );
-  assert.equal(
+  assert.match(
     validateOverride("params.momentum", '{"strategy":"hexchaser"}'),
-    null,
+    /fixed for this bot/,
   );
-  assert.equal(
+  assert.match(
     validateOverride("params.trend", '{"strategy":"market_mover"}'),
-    null,
+    /fixed for this bot/,
   );
+  // Numeric params on a pinned bot are still allowed.
+  assert.equal(validateOverride("params.trend", '{"riskPct":1.1}'), null);
 });
 
 test("the signal timeframe is a fixed, non-tunable parameter", () => {

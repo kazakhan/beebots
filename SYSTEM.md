@@ -22,18 +22,21 @@ compare against it or to "beat" it.
 - **The LLM** — an optional provider-backed model (selected in the dashboard).
   It can make the trading decision, and/or review the review. It never places
   orders itself; code controls size and execution.
-- **Three strategy bots**, each running one **strategy template** from the pool.
-  Since 3.6.0 the templates reproduce the three top performers from the original
-  beebots, plus Keeper:
-  - `momentum` (Spark) — **Hexchaser**: the strongest 7-day momentum coins,
-    ranked by the collector; long while momentum stays positive.
-  - `breakout` (Scout) — **Orakelia**: the strongest 7-day momentum, but only
-    while price **and** volume are rising.
-  - `trend` (Keeper) — **Market Mover**: accumulate the largest **top-20** coins
-    by market cap and hold.
-  - `trend_pullback` remains in the pool as an alternative.
-  The bots differ only in **what they buy**; since 3.6.0 they share one exit and
-  sizing path (below), so never reintroduce per-strategy exit rules.
+- **Three strategy bots**, each running one **pinned strategy template** (3.8.0).
+  The template is fixed by the owner; the review may only tune numeric params:
+  - `trend` (Keeper) — **Orakelia**: the strongest 7-day momentum coins (top-100
+    liquid), bought only while price **and** volume are rising; **code exit** when
+    momentum fades or volume drops, then the coin is **paused** for
+    `pauseHours` (4) before it can be re-bought. The trailing stop is kept.
+  - `momentum` (Spark) — **ConnorsThorp**: a structural pullback in a 1h uptrend
+    with **RSI(14) oversold**; **code exit** when RSI returns to neutral or the
+    trailing stop. Sized by **Half-Kelly** (win rate x payoff 1.5), capped at 5%
+    account risk and 1/maxPositions of cash.
+  - `breakout` (Scout) — **Breakout (liquid)**: a completed close above the
+    24-bar range high on a relative-volume surge, within an uptrend context.
+  - `hexchaser`, `market_mover`, `trend_pullback` remain selectable in the pool
+    but are not assigned. The bots differ in what they buy and in their code
+    exits; all share the percentage stop / trailing / time stop.
 
 - **`maxCandidates` is fixed at 100 and is not review-tunable.** It is a
   structural cap (how many candidates a bot may assess), so it is locked: not in
@@ -72,43 +75,35 @@ and must never be coupled:
 
 ## Strategy pool and rotation
 
-Each bot runs one **strategy template** from a **dynamic pool**
-(`getTemplates()` in `strategy-v2.mjs`), selected by `params.<bot>.strategy`. A
-template is a **coded rule + universe + timeframe**; the review may delete
-a losing one or add a new combination (`strategyPool` target), but it can never
-add a rule that is not coded. The initial pool:
+Each bot runs one **pinned strategy template** from a **dynamic pool**
+(`getTemplates()` in `strategy-v2.mjs`). A template is a **coded rule + universe +
+timeframe**; the pool holds `orakelia`, `connors_thorp`, `breakout_liquid`,
+`hexchaser`, `market_mover` and `trend_pullback`. The three bots are **pinned**
+(3.8.0) to `orakelia` (Keeper), `connors_thorp` (Spark) and `breakout_liquid`
+(Scout); `strategyPinned` refuses any proposal that changes a pinned bot's
+strategy, and `effectiveRules` enforces the pin. The review may still tune a
+pinned bot's numeric params. The liquid templates scan the **top-100** market-cap
+universe. `evaluate()` dispatches on the template's rule; the collector applies
+its universe (`all`/`top100`/`top20`) and its ranking.
 
-`hexchaser` (7d momentum leaders), `orakelia` (7d momentum + rising price &
-volume), `market_mover` (top-20 accumulation), `trend_pullback` (Keeper).
-
-The defaults: **Spark = `hexchaser`** (top-3 7d leaders over the full universe),
-**Scout = `orakelia`** (top-3 7d leaders that also have rising price and volume),
-**Keeper = `market_mover`** (the largest top-20 by market cap). Templates have no
-pullback/breakout gate where their rule does not need one: the momentum rules
-hold the **top-3 leaders**; Market Mover holds the top-20. `evaluate()`
-dispatches on the template's rule; the collector applies its universe
-(`all`/`top100`/`top20`) and its ranking. The fallback to the built-ins means a
-bot whose template was deleted keeps trading until the review reassigns it.
-
-**One exit and sizing path (3.6.0).** Every bot - and Dice - exits only on the
+**Shared exits plus code rules (3.8.0).** Every bot - and Dice - exits on the
 **percentage protective stop** (`stopPct`), the **trailing stop**
-(`trailActivationPct`/`trailPct`) or `maxHoldHours`. No strategy attaches an exit
-policy and there are no rule-based strategy exits. `executionPlan` sizes against
-`stopPct` (size = `riskPct / stopPct`), so a position is ~25-33% of capital. The
-deciser is **never offered a discretionary SELL** for any strategy - HOLD only.
+(`trailActivationPct`/`trailPct`) or `maxHoldHours`. On top of those, the pinned
+templates have deterministic **code exits**: Orakelia exits on a momentum fade or
+a volume drop and then **pauses** that coin; ConnorsThorp exits when RSI returns
+to neutral. These are code, never the decider: the deciser is **never offered a
+discretionary SELL** for any strategy - HOLD only. `executionPlan` sizes against
+`stopPct` (size = `riskPct / stopPct`); ConnorsThorp uses **Half-Kelly** risk,
+capped at 5% of the account.
 
-The Trade Review may reassign a bot to a different template, and is **required**
-to do so when the bot is flagged: after **10 closed trades** and losing money,
-the review replaces the losing strategy rather than nudging it.
-Open positions are left to resolve; new entries use the new strategy.
-`maxCandidates` is never review-tunable. The 4-hourly pass may adjust or rotate
-any bot's strategy and may edit the pool; no template is pinned.
+The review's auto-apply can be turned **off** (advisory only): it then shows
+proposals but changes nothing. The 4-hourly pass is the only one that applies.
 
 **Losing-streak trigger.** When a bot closes **5 trades in a row at a loss**, the
 engine immediately runs a **focused review of just that bot** (once per streak -
 re-armed when the streak breaks). That review may only change the streaking bot
 (the gate refuses proposals for other bots); it can adjust the bot's numeric
-params or replace its strategy template.
+params.
 
 ## Recent-close context (no cooldown)
 

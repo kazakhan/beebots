@@ -932,7 +932,7 @@ test("the review prompt carries the strategy pool and due flags", async () => {
   }
 });
 
-test("every bot's strategy is offered to the review", () => {
+test("a pinned bot's strategy is not offered to the review", () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-pinview-"));
   const store = new Store(":memory:", config());
   try {
@@ -943,9 +943,9 @@ test("every bot's strategy is offered to the review", () => {
       config: {},
       dataDir: dir,
     });
-    assert.equal(reviewer.paramView("breakout").strategy, "orakelia");
-    assert.equal(reviewer.paramView("momentum").strategy, "hexchaser");
-    assert.equal(reviewer.paramView("trend").strategy, "market_mover");
+    assert.equal(reviewer.paramView("breakout").strategy, undefined);
+    assert.equal(reviewer.paramView("momentum").strategy, undefined);
+    assert.equal(reviewer.paramView("trend").strategy, undefined);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
