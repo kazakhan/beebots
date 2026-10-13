@@ -14,6 +14,20 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.9.1] - 2026-10-13 - Fixed risk applies to the strategy bots only
+
+### Fixed
+
+- The fixed 0.5% validation risk budget in `effectiveRules` was applied to every
+  bot, including the random control arm (`Dice`). It now applies only to the
+  three strategy bots; the control arm keeps its own `riskPct`.
+
+### Verification
+
+- 316 Node tests pass.
+
+---
+
 ## [3.9.0] - 2026-10-13 - Freeze the experiment, fix the mechanics, fixed risk
 
 Phase 0 + Phase 2 + Phase 3 of the audit. The bots were performing like the

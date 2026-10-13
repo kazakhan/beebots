@@ -42,7 +42,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.9.0";
+const BUILD = "3.9.1";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -264,7 +264,7 @@ export class Engine {
     // the realised win rate is too small a sample to estimate Kelly. The risk
     // budget is a code-owned default (0.5%), and the per-entry sizing breakdown
     // is logged.
-    base.riskPct = 0.5;
+    if (IDS.includes(id)) base.riskPct = 0.5;
     return base;
   }
   // Runtime-wide knobs the review may tune. Defaults are the pre-review values.

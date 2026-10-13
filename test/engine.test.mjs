@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "../src/engine.mjs";
 import { Store } from "../src/store.mjs";
-import { config, arm, buy, exchangeOrder } from "./helpers.mjs";
+import { config, arm, buy, exchangeOrder, addControl } from "./helpers.mjs";
 import { eligibility, closedCandles } from "../src/market.mjs";
 function fixture() {
   const c = config();
@@ -621,6 +621,25 @@ test("ruleExit uses the exit rules frozen on the position", () => {
     });
     assert.equal(frozen.reason, "Volume dropped");
     assert.equal(frozen.pause, true);
+  } finally {
+    store.close();
+  }
+});
+
+test("the fixed validation risk applies to strategy bots, not the control arm", () => {
+  const c = addControl(config());
+  const store = new Store(":memory:", c);
+  try {
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market: {},
+      laya: {},
+      model: {},
+    });
+    assert.equal(engine.effectiveRules("breakout").riskPct, 0.5);
+    assert.equal(engine.effectiveRules("control").riskPct, 1);
   } finally {
     store.close();
   }
