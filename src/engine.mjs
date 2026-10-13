@@ -42,7 +42,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.10.0";
+const BUILD = "3.11.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -1887,9 +1887,13 @@ export class Engine {
     if (rule === "orakelia") {
       if (Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0)
         return { reason: "Momentum faded", pause: true };
-      const floor = Number(er?.volumeFloor ?? rules.volumeFloor) || 1;
-      if (Number(f.relativeVolume) < floor)
-        return { reason: "Volume dropped", pause: true };
+      // 3.11.0 experiment: the volume-drop exit is off by default.
+      const volumeDrop = er?.volumeDropExit ?? rules.volumeDropExit;
+      if (volumeDrop !== false) {
+        const floor = Number(er?.volumeFloor ?? rules.volumeFloor) || 1;
+        if (Number(f.relativeVolume) < floor)
+          return { reason: "Volume dropped", pause: true };
+      }
     }
     if (rule === "connors_thorp") {
       const neutral = Number(er?.rsiNeutral ?? rules.rsiNeutral) || 50;

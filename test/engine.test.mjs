@@ -613,11 +613,17 @@ test("ruleExit uses the exit rules frozen on the position", () => {
       laya: {},
       model: {},
     });
-    // Live floor is 1 -> 1.5 is fine; the frozen floor of 2 must fire.
+    // Momentum is fine and the volume-drop exit is OFF by default -> no exit.
     assert.equal(engine.ruleExit("trend", { product: "X-USDC" }), null);
+    // A frozen position that still requires the volume-drop exit must fire.
     const frozen = engine.ruleExit("trend", {
       product: "X-USDC",
-      exitRules: { rule: "orakelia", volumeFloor: 2, pauseHours: 4 },
+      exitRules: {
+        rule: "orakelia",
+        volumeDropExit: true,
+        volumeFloor: 2,
+        pauseHours: 4,
+      },
     });
     assert.equal(frozen.reason, "Volume dropped");
     assert.equal(frozen.pause, true);

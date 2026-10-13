@@ -1157,54 +1157,55 @@ test("the liquid templates scan the top-100 universe", () => {
   assert.equal(BUILTIN_TEMPLATES.breakout_liquid.rule, "breakout_liquid");
 });
 
-test("connors_thorp computes RSI on the signal frame and gates on it", () => {
-  // A 15m series: a long rise, then a sustained pullback (RSI oversold).
+test("connors_thorp enters on an RSI recovery (default mode)", () => {
+  // A 15m series: a long rise, a sustained pullback (RSI oversold), then enough
+  // up bars for RSI to cross back above oversold.
   const series = [];
   for (let i = 0; i < 220; i++) series.push(100 + i * 0.2);
-  for (let i = 0; i < 14; i++) series.push(144 - i * 0.4);
-  // Expand each 15m close into three 5m closes that aggregate back exactly.
-  const five = [];
-  series.forEach((close, i) => {
-    for (let j = 0; j < 3; j++)
-      five.push({
+  for (let i = 0; i < 14; i++) series.push(series.at(-1) - 0.4);
+  for (let i = 0; i < 5; i++) series.push(series.at(-1) + 0.4);
+  const expand = (closes) =>
+    closes.flatMap((close, i) =>
+      [0, 1, 2].map((j) => ({
         time: i * 900000 + j * 300000,
         open: close,
         high: close + 0.05,
         low: close - 0.05,
         close,
         volume: 1,
-      });
-  });
+      })),
+    );
   const f = evaluate(
     "momentum",
-    { five, hour: risingHour(), four: [] },
+    { five: expand(series), hour: risingHour(), four: [] },
     { strategy: "connors_thorp" },
     meme,
   );
-  assert.ok(Number.isFinite(f.rsi), "RSI computed");
-  assert.ok(f.rsi < 30, `oversold RSI, got ${f.rsi}`);
-  assert.ok(!f.reasons.includes("RSI not oversold"));
-  // A rising series is not oversold and is refused on that reason.
-  const hot = evaluate(
+  assert.ok(Number.isFinite(f.rsi) && Number.isFinite(f.prevRsi));
+  assert.ok(f.prevRsi < 30, `prevRsi oversold, got ${f.prevRsi}`);
+  assert.ok(f.rsi >= 30, `rsi recovered, got ${f.rsi}`);
+  assert.ok(!f.reasons.includes("No RSI recovery"));
+
+  // Without the recovery bars, RSI is still falling -> refused.
+  const falling = [];
+  for (let i = 0; i < 220; i++) falling.push(100 + i * 0.2);
+  for (let i = 0; i < 16; i++) falling.push(falling.at(-1) - 0.4);
+  const no = evaluate(
     "momentum",
-    {
-      five: risingHour().flatMap((b, i) =>
-        [0, 1, 2].map((j) => ({
-          time: i * 900000 + j * 300000,
-          open: b.close,
-          high: b.close + 0.05,
-          low: b.close - 0.05,
-          close: b.close,
-          volume: 1,
-        })),
-      ),
-      hour: risingHour(),
-      four: [],
-    },
+    { five: expand(falling), hour: risingHour(), four: [] },
     { strategy: "connors_thorp" },
     meme,
   );
-  assert.ok(hot.reasons.includes("RSI not oversold"));
+  assert.ok(no.reasons.includes("No RSI recovery"));
+
+  // The original "oversold" mode still gates on RSI < 30 + a reversion close.
+  const oversold = evaluate(
+    "momentum",
+    { five: expand(falling), hour: risingHour(), four: [] },
+    { strategy: "connors_thorp", rsiMode: "oversold" },
+    meme,
+  );
+  assert.ok(!oversold.reasons.includes("No RSI recovery"));
 });
 
 test("breakout_liquid takes a range breakout on a volume surge", () => {
@@ -1260,4 +1261,24 @@ test("executionPlan returns a sizing breakdown", () => {
     p.sizing.plannedLossPct <= 0.5 + 1e-9,
     "planned loss within budget",
   );
+});
+
+test("breakout_liquid skips the pullback filter by default and can require consolidation", () => {
+  // Default (requirePullback false): no mandatory EMA20-pullback rejection.
+  const f = evaluate(
+    "breakout",
+    scoutFrame(),
+    { strategy: "breakout_liquid", timeframe: "5m" },
+    meme,
+  );
+  assert.ok(!f.reasons.includes("No orderly EMA20 pullback"));
+  assert.equal(f.setupEligible, true, JSON.stringify(f.reasons));
+  // A consolidation requirement can reject an uncompressed range.
+  const tight = evaluate(
+    "breakout",
+    scoutFrame(),
+    { strategy: "breakout_liquid", timeframe: "5m", consolidationAtr: 0.5 },
+    meme,
+  );
+  assert.ok(tight.reasons.includes("No consolidation"));
 });

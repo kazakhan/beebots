@@ -43,6 +43,8 @@ export const PARAM_SCHEMA = {
   rsiPeriod: { min: 2, max: 50, int: true },
   rsiOversold: { min: 5, max: 50 },
   rsiNeutral: { min: 30, max: 80 },
+  rsiMode: { enum: ["recovery", "oversold"] },
+  consolidationAtr: { min: 0, max: 20 },
   rewardRisk: { min: 0.5, max: 5 },
   pauseHours: { min: 0, max: 168, int: true },
   topFraction: { min: 0.05, max: 1 },

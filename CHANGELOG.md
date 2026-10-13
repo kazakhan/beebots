@@ -14,6 +14,39 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.11.0] - 2026-10-13 - Phase 4 experiments (one per bot)
+
+Each experiment is on a distinct bot, so the arms do not confound and the report
+attributes each change to its own arm. All three are revertible knobs.
+
+### Changed
+
+- **Keeper (`orakelia`): the volume-drop exit is OFF by default**
+  (`volumeDropExit: false`). Falling volume alone no longer closes a position;
+  the momentum-fade exit and the 4h per-coin pause remain.
+- **Spark (`connors_thorp`): RSI recovery entry** (`rsiMode: "recovery"`, the
+  default). Entry now requires RSI to cross back **above** oversold
+  (`prevRsi < 30 && rsi >= 30`) instead of buying while it is still falling. The
+  original `"oversold"` trigger is retained as an option.
+- **Scout (`breakout_liquid`): the EMA20-pullback pre-filter is OFF by default**
+  (`requirePullback: false`); only the uptrend context + range breakout are
+  required and the stop is a plain 2-ATR stop. An optional consolidation filter
+  (`consolidationAtr`, default 0 = off) can require a compressed pre-breakout
+  range.
+
+### Added
+
+- `rsiMode` and `consolidationAtr` to the override schema; `volumeDropExit`,
+  `requirePullback`, `consolidationAtr` and `rsiMode` to the template defaults;
+  `contextUptrend()` extracted from `trendCore()`.
+
+### Verification
+
+- 320 Node tests pass, up from 319: the RSI-recovery vs oversold modes, the
+  breakout pullback/consolidation knobs, and the volume-drop exit default.
+
+---
+
 ## [3.10.0] - 2026-10-13 - Per-exit-reason P&L report (Phase 1)
 
 The evidence layer the strategy experiments are judged on. `npm run report`

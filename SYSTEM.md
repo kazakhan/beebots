@@ -29,10 +29,14 @@ compare against it or to "beat" it.
     momentum fades or volume drops, then the coin is **paused** for
     `pauseHours` (4) before it can be re-bought. The trailing stop is kept.
   - `momentum` (Spark) — **ConnorsThorp**: a structural pullback in a 1h uptrend
-    with **RSI(14) oversold**; **code exit** when RSI returns to neutral or the
+    with **RSI(14)**; 3.11.0 enters on an **RSI recovery** (`prevRsi < 30 &&
+    rsi >= 30`) by default; **code exit** when RSI returns to neutral or the
     trailing stop. Sized by a **fixed 0.5% risk budget** (3.9.0).
   - `breakout` (Scout) — **Breakout (liquid)**: a completed close above the
     24-bar range high on a relative-volume surge, within an uptrend context.
+    3.11.0 drops the mandatory EMA20-pullback pre-filter by default
+    (`requirePullback: false`); an optional `consolidationAtr` can require a
+    compressed pre-breakout range.
   - `hexchaser`, `market_mover`, `trend_pullback` remain selectable in the pool
     but are not assigned. The bots differ in what they buy and in their code
     exits; all share the percentage stop / trailing / time stop.

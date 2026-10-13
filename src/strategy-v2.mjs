@@ -110,7 +110,9 @@ export const TEMPLATE_DEFAULTS = {
     minBreadth: 10,
     relativeVolume: 1,
     // Exit when relative volume falls below this floor (the "volume drops"
-    // half of Orakelia's exit rule).
+    // half of Orakelia's exit rule). 3.11.0 experiment: OFF by default - a
+    // falling volume does not by itself mean the uptrend failed.
+    volumeDropExit: false,
     volumeFloor: 1,
     // After a fade exit, block re-entry on that coin for this many hours.
     pauseHours: 4,
@@ -122,6 +124,9 @@ export const TEMPLATE_DEFAULTS = {
     rsiPeriod: 14,
     rsiOversold: 30,
     rsiNeutral: 50,
+    // 3.11.0 experiment: "recovery" enters on RSI crossing back above oversold
+    // (rather than while still falling); "oversold" is the original trigger.
+    rsiMode: "recovery",
     rewardRisk: 1.5,
     topFraction: 0.2,
     minBreadth: 10,
@@ -132,6 +137,10 @@ export const TEMPLATE_DEFAULTS = {
     maxExtensionAtr: 1,
     minSignalBars: 20,
     pullbackBars: 5,
+    // 3.11.0 experiment: drop the mandatory EMA20-pullback pre-filter (false),
+    // and optionally require the pre-breakout range to be compressed.
+    requirePullback: false,
+    consolidationAtr: 0,
   },
   market_mover: { maxExtensionAtr: 0.5, minSignalBars: 4, minBreadth: 1 },
   momentum_leaders: {
@@ -318,16 +327,22 @@ export function aggregate(rows, seconds) {
 // The context check is deliberately simple — price above a long EMA and the
 // short EMA above the long one. Keeper's original 4-hour, 250-bar stack required
 // ~41 days of history and starved every other market. Do not bring that back.
-export function trendCore(f, ctx, prior, rules, fail) {
-  const a = atr(prior),
-    prices = ctx.map((x) => x.close),
+export function contextUptrend(f, ctx, fail) {
+  // The uptrend context alone (no pullback requirement): hourly close above the
+  // long EMA and the short EMA above the long one. Used by breakout_liquid when
+  // the pullback pre-filter is off.
+  const prices = ctx.map((x) => x.close),
     a20 = ema(prices, 20),
     a50 = ema(prices, 50);
-  f.atr = a;
   f.ema20 = a20;
   f.ema50 = a50;
   f.contextClose = prices.at(-1);
   fail(f.contextClose > a50 && a20 > a50, "Context uptrend not established");
+}
+export function trendCore(f, ctx, prior, rules, fail) {
+  const a = atr(prior);
+  f.atr = a;
+  contextUptrend(f, ctx, fail);
   const pullback = prior.slice(-Math.max(1, Number(rules.pullbackBars) || 5));
   const zones = pullback.map((bar, i) => {
     const tail = prior.slice(0, prior.length - pullback.length + i + 1);
@@ -489,12 +504,23 @@ export function evaluate(id, frames, rules, membership) {
       throw Error("Connors-Thorp history warming");
     const { a, stop } = trendCore(f, h, prior, r, fail);
     const closes = [...prior.map((x) => x.close), close];
+    const oversold = Number(r.rsiOversold) || 30;
     f.rsi = rsi(closes, Number(r.rsiPeriod) || 14);
-    fail(
-      Number.isFinite(f.rsi) && f.rsi < (Number(r.rsiOversold) || 30),
-      "RSI not oversold",
-    );
-    fail(close > prior.at(-1).close, "No reversion close");
+    f.prevRsi = rsi(closes.slice(0, -1), Number(r.rsiPeriod) || 14);
+    if ((r.rsiMode ?? "recovery") === "recovery") {
+      // Enter when RSI crosses back ABOVE oversold (the pullback is turning),
+      // rather than while it is still falling.
+      fail(
+        Number.isFinite(f.prevRsi) &&
+          Number.isFinite(f.rsi) &&
+          f.prevRsi < oversold &&
+          f.rsi >= oversold,
+        "No RSI recovery",
+      );
+    } else {
+      fail(Number.isFinite(f.rsi) && f.rsi < oversold, "RSI not oversold");
+      fail(close > prior.at(-1).close, "No reversion close");
+    }
     f.stopPrice = stop;
     fail(close - f.stopPrice <= 3 * a, "Reversion stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
@@ -507,7 +533,17 @@ export function evaluate(id, frames, rules, membership) {
     const need = Math.max(minBars, (Number(r.rangeBars) || 24) + 1, 15);
     if (bars.length < need || (h?.length ?? 0) < 60)
       throw Error("Breakout history warming");
-    const { a, stop } = trendCore(f, h, prior, r, fail);
+    const a = atr(prior);
+    f.atr = a;
+    // 3.11.0 experiment: the EMA20-pullback pre-filter is optional. Without it,
+    // only the uptrend context is required and the stop is a plain ATR stop.
+    let stop;
+    if (r.requirePullback) {
+      ({ stop } = trendCore(f, h, prior, r, fail));
+    } else {
+      contextUptrend(f, h, fail);
+      stop = close - 2 * a;
+    }
     const range = prior.slice(-r.rangeBars),
       vols = range.map((x) => x.volume);
     f.channelHigh = Math.max(...range.map((x) => x.high));
@@ -516,6 +552,12 @@ export function evaluate(id, frames, rules, membership) {
     f.relativeVolume = med > 0 ? last.volume / med : 0;
     fail(close > f.channelHigh, "No completed breakout close");
     fail(f.relativeVolume >= r.relativeVolume, "Relative volume insufficient");
+    if (Number(r.consolidationAtr) > 0)
+      fail(
+        a > 0 &&
+          (f.channelHigh - f.channelLow) / a <= Number(r.consolidationAtr),
+        "No consolidation",
+      );
     f.stopPrice = stop;
     fail(close - f.stopPrice <= 3 * a, "Breakout stop too distant");
     f.maxEntry = close + r.maxExtensionAtr * a;
