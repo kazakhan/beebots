@@ -740,7 +740,10 @@ export class TradeReview {
     const s = this.store.read();
     // With no LLM, Laya's controller reverts losers before we consider new
     // proposals. With an LLM, the LLM decides reverts from the ledger below.
-    if (!this.llmEnabled()) this.revertLosers(s.orders, until);
+    // Frozen (autoApply off, or an hourly data pass) means NO automatic writes at
+    // all - including backup restoration - so results are attributable.
+    if (!this.llmEnabled() && apply && autoApply)
+      this.revertLosers(s.orders, until);
     const perf = layaPerformance({
       events: this.store.recent(5000),
       orders: s.orders,

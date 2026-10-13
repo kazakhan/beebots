@@ -1224,3 +1224,40 @@ test("breakout_liquid takes a range breakout on a volume surge", () => {
   );
   assert.equal(thin.setupEligible, false);
 });
+
+test("breakout_liquid needs the full range lookback plus the signal bar", () => {
+  // Only 10 signal bars: less than rangeBars(24)+1, so it must not evaluate.
+  const five = scoutFrame().five.slice(-30);
+  assert.throws(
+    () =>
+      evaluate(
+        "breakout",
+        { five, hour: risingHour(), four: [] },
+        { strategy: "breakout_liquid", timeframe: "5m" },
+        meme,
+      ),
+    /warming/,
+  );
+});
+
+test("executionPlan returns a sizing breakdown", () => {
+  const f = { stopPrice: 95 };
+  const q = {
+    ask: 100,
+    bid: 99.99,
+    asks: [{ price: "100", size: "10" }],
+    bids: [{ price: "99.99", size: "10" }],
+  };
+  const p = executionPlan(f, q, 100, 0.001, {
+    riskPct: 0.5,
+    tradeFraction: 0.9,
+    maxCostRisk: 0.2,
+    stopPct: 3,
+  });
+  assert.equal(p.sizing.requestedRiskPct, 0.5);
+  assert.ok(p.sizing.notionalPct > 0 && p.sizing.notionalPct < 100);
+  assert.ok(
+    p.sizing.plannedLossPct <= 0.5 + 1e-9,
+    "planned loss within budget",
+  );
+});

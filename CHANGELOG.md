@@ -14,6 +14,47 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.9.0] - 2026-10-13 - Freeze the experiment, fix the mechanics, fixed risk
+
+Phase 0 + Phase 2 + Phase 3 of the audit. The bots were performing like the
+random control and the deployed numbers did not match the documented strategies;
+this release makes the configuration the code's to own, fixes the mechanics found
+in the audit, and puts sizing on a fixed small risk budget.
+
+### Changed
+
+- **Automatic writes are frozen.** `revertLosers` (which restored old override
+  backups on every pass) now runs only when the pass applies AND
+  `review.autoApply` is on. With the LLM review off or autoApply off, a review
+  pass performs **no writes at all**.
+- **The code owns the strategy parameters.** `effectiveRules` takes only an
+  owner allowlist from the live config (`capital`, `maxPositions`,
+  `tradeFraction`, `stopPct`, `trailPct`, `trailActivationPct`, `maxHoldHours`,
+  `maxCostRisk`, liquidity filters, `cadenceMs`, `categories`); every
+  strategy/rule parameter comes from the code defaults + template. A live config
+  carrying its own rule copies can no longer override the deployed strategy.
+- **Fixed 0.5% risk per trade** replaces Half-Kelly (whose p=0.5 fallback just
+  selected the 5% cap). `riskPct` is now code-owned.
+- **Signal-based dedup**: a bot is assessed once per closed signal, not once per
+  5-minute cadence bucket, so a 15m signal is no longer acted on three times.
+- **Exit rules are frozen onto the position at entry** (`exitRules`), so a later
+  config/param change cannot move an open position's rule exit.
+- **Breakout needs the full range lookback plus the signal bar** (was
+  `minSignalBars=20` with a 24-bar range, i.e. a silently short range).
+
+### Added
+
+- **Startup log of the effective rules** and the rule hash (a `system` event).
+- **`rulesHash`, `exitRules` and a sizing breakdown** (`requestedRiskPct`,
+  `notionalPct`, `plannedLossPct`) stamped on every order/position.
+
+### Verification
+
+- 315 Node tests pass, up from 311: a frozen pass performs no writes, breakout
+  history floor, the sizing breakdown, and frozen exit rules.
+
+---
+
 ## [3.8.0] - 2026-10-07 - Pinned faithful strategies, code exits, Half-Kelly
 
 The review had churned the bots (49 applied changes: rotating strategies and

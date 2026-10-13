@@ -184,7 +184,7 @@ export const defaults = {
     rangeAtr: 6,
     relativeVolume: 2,
     maxExtensionAtr: 1,
-    riskPct: 1,
+    riskPct: 0.5,
     maxCostRisk: 0.4,
     // Percentage stop + trailing + time stop, shared with the other arms.
     stopPct: 3,
@@ -207,7 +207,7 @@ export const defaults = {
     minBreadth: 10,
     pullbackBars: 5,
     maxExtensionAtr: 0.5,
-    riskPct: 1,
+    riskPct: 0.5,
     maxCostRisk: 0.2,
     stopPct: 3,
     // Keeper lets a winner run: a wider trail than the old harmful 2-3%.
@@ -228,10 +228,8 @@ export const defaults = {
     minBreadth: 10,
     pullbackBars: 5,
     maxExtensionAtr: 0.75,
-    // Half-Kelly is computed per entry from the arm's realised win rate and
-    // capped at 5% account risk (see Engine.effectiveRules). tradeFraction keeps
-    // three positions affordable.
-    riskPct: 1.5,
+    // Validation sizing (3.9.0): a small fixed risk budget; Half-Kelly is off.
+    riskPct: 0.5,
     maxCostRisk: 0.2,
     stopPct: 3,
     trailPct: 2,
@@ -503,9 +501,11 @@ export function evaluate(id, frames, rules, membership) {
     f.rankScore = f.ema20 / f.ema50;
   } else if (strat === "breakout_liquid") {
     // Breakout on liquid coins: a completed close above the pre-breakout range
-    // on a relative-volume surge, within an uptrend context.
+    // on a relative-volume surge, within an uptrend context. The range needs its
+    // full lookback PLUS the signal bar, so the floor is rangeBars + 1.
     const minBars = Number(r.minSignalBars) || 20;
-    if (bars.length < Math.max(minBars, 15) || (h?.length ?? 0) < 60)
+    const need = Math.max(minBars, (Number(r.rangeBars) || 24) + 1, 15);
+    if (bars.length < need || (h?.length ?? 0) < 60)
       throw Error("Breakout history warming");
     const { a, stop } = trendCore(f, h, prior, r, fail);
     const range = prior.slice(-r.rangeBars),
@@ -803,5 +803,14 @@ export function executionPlan(f, q, cash, fee, rules) {
     atr: f.atr,
     version: VERSION,
     signalTime: f.signalTime,
+    // Per-entry sizing breakdown, logged with the order: the requested risk
+    // budget, the notional as a fraction of cash, and the planned loss if the
+    // stop is hit (all in percent of cash).
+    sizing: {
+      requestedRiskPct: Number(rules.riskPct) || 0,
+      notionalPct: cash > 0 ? (quantity * q.ask * 100) / cash : null,
+      plannedLossPct:
+        cash > 0 ? (quantity * (buy - stopLevel) * 100) / cash : null,
+    },
   };
 }

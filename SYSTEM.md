@@ -30,8 +30,7 @@ compare against it or to "beat" it.
     `pauseHours` (4) before it can be re-bought. The trailing stop is kept.
   - `momentum` (Spark) — **ConnorsThorp**: a structural pullback in a 1h uptrend
     with **RSI(14) oversold**; **code exit** when RSI returns to neutral or the
-    trailing stop. Sized by **Half-Kelly** (win rate x payoff 1.5), capped at 5%
-    account risk and 1/maxPositions of cash.
+    trailing stop. Sized by a **fixed 0.5% risk budget** (3.9.0).
   - `breakout` (Scout) — **Breakout (liquid)**: a completed close above the
     24-bar range high on a relative-volume surge, within an uptrend context.
   - `hexchaser`, `market_mover`, `trend_pullback` remain selectable in the pool
@@ -93,8 +92,18 @@ templates have deterministic **code exits**: Orakelia exits on a momentum fade o
 a volume drop and then **pauses** that coin; ConnorsThorp exits when RSI returns
 to neutral. These are code, never the decider: the deciser is **never offered a
 discretionary SELL** for any strategy - HOLD only. `executionPlan` sizes against
-`stopPct` (size = `riskPct / stopPct`); ConnorsThorp uses **Half-Kelly** risk,
-capped at 5% of the account.
+`stopPct` (size = `riskPct / stopPct`); `riskPct` is a **fixed 0.5%** code-owned
+budget during validation (3.9.0). The exit rules are **frozen onto the position
+at entry** (`exitRules`) so a later change cannot move an open position's exit.
+
+**Single authoritative config (3.9.0).** `effectiveRules` takes only an owner
+allowlist from the live config; every strategy/rule parameter comes from the code
+defaults + template, so the live config cannot silently override the deployed
+strategy. The effective rules and rule hash are logged at startup, and each order
+carries a `rulesHash` and a sizing breakdown.
+
+**Frozen when advisory.** With the LLM review off or `autoApply` off, a review
+pass performs **no writes at all** - including backup restoration.
 
 The review's auto-apply can be turned **off** (advisory only): it then shows
 proposals but changes nothing. The 4-hourly pass is the only one that applies.

@@ -219,7 +219,7 @@ test("effectiveRules pins maxCandidates to 100 even with a hostile override", ()
   mkdirSync(join(dir, "overrides"), { recursive: true });
   writeFileSync(
     join(dir, "overrides", "params-breakout.json"),
-    JSON.stringify({ maxCandidates: 6, riskPct: 1.2 }),
+    JSON.stringify({ maxCandidates: 6, rangeBars: 30 }),
   );
   const store = new Store(":memory:", c);
   try {
@@ -233,7 +233,8 @@ test("effectiveRules pins maxCandidates to 100 even with a hostile override", ()
     });
     const rules = engine.effectiveRules("breakout");
     assert.equal(rules.maxCandidates, 100, "pinned");
-    assert.equal(rules.riskPct, 1.2, "other stored values still apply");
+    assert.equal(rules.rangeBars, 30, "other stored values still apply");
+    assert.equal(rules.riskPct, 0.5, "risk budget is code-owned");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -397,7 +398,7 @@ test("effectiveRules pins the strategy for the three bots", () => {
   mkdirSync(join(dir, "overrides"), { recursive: true });
   writeFileSync(
     join(dir, "overrides", "params-breakout.json"),
-    JSON.stringify({ strategy: "orakelia", riskPct: 1.2 }),
+    JSON.stringify({ strategy: "orakelia", rangeBars: 30 }),
   );
   const store = new Store(":memory:", c);
   try {
@@ -411,7 +412,7 @@ test("effectiveRules pins the strategy for the three bots", () => {
     });
     const b = engine.effectiveRules("breakout");
     assert.equal(b.strategy, "breakout_liquid", "the pinned template wins");
-    assert.equal(b.riskPct, 1.2, "other params still apply");
+    assert.equal(b.rangeBars, 30, "other params still apply");
     assert.equal(engine.effectiveRules("trend").strategy, "orakelia");
     assert.equal(engine.effectiveRules("momentum").strategy, "connors_thorp");
   } finally {
@@ -504,7 +505,7 @@ test("effectiveRules pins the template timeframe even with a hostile override", 
   }
 });
 
-test("effectiveRules gives ConnorsThorp a Half-Kelly risk with a position cap", () => {
+test("effectiveRules uses a fixed small risk budget, not Half-Kelly", () => {
   const c = config();
   const store = new Store(":memory:", c);
   try {
@@ -516,13 +517,9 @@ test("effectiveRules gives ConnorsThorp a Half-Kelly risk with a position cap", 
       laya: {},
       model: {},
     });
-    const r = engine.effectiveRules("momentum");
-    // p=0.5, b=1.5 -> full Kelly 1/6, half ~8.3%, capped at 5% account risk.
-    assert.equal(r.riskPct, 5);
-    assert.ok(
-      r.tradeFraction <= 1 / 3 + 1e-9,
-      "keeps three positions affordable",
-    );
+    for (const id of ["breakout", "trend", "momentum"]) {
+      assert.equal(engine.effectiveRules(id).riskPct, 0.5, `${id} fixed risk`);
+    }
     assert.equal(engine.effectiveRules("trend").strategy, "orakelia");
   } finally {
     store.close();
@@ -589,6 +586,41 @@ test("a rule exit can pause a coin from re-entry", () => {
     assert.equal(engine.pausedProducts("trend").has("X-USDC"), false);
     engine.pauseProduct("trend", "X-USDC");
     assert.equal(engine.pausedProducts("trend").has("X-USDC"), true);
+  } finally {
+    store.close();
+  }
+});
+
+test("ruleExit uses the exit rules frozen on the position", () => {
+  const c = config();
+  const store = new Store(":memory:", c);
+  try {
+    const market = {
+      snapshot: () => [
+        {
+          product: "X-USDC",
+          momentum7dPct: 1,
+          momentum24hPct: 1,
+          relativeVolume: 1.5,
+        },
+      ],
+    };
+    const engine = new Engine({
+      config: c,
+      store,
+      exchange: {},
+      market,
+      laya: {},
+      model: {},
+    });
+    // Live floor is 1 -> 1.5 is fine; the frozen floor of 2 must fire.
+    assert.equal(engine.ruleExit("trend", { product: "X-USDC" }), null);
+    const frozen = engine.ruleExit("trend", {
+      product: "X-USDC",
+      exitRules: { rule: "orakelia", volumeFloor: 2, pauseHours: 4 },
+    });
+    assert.equal(frozen.reason, "Volume dropped");
+    assert.equal(frozen.pause, true);
   } finally {
     store.close();
   }

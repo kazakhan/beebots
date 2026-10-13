@@ -452,6 +452,9 @@ export class Store extends EventEmitter {
                 trailPct: o.trailPct,
                 trailActivationPct: o.trailActivationPct,
                 maxHoldHours: o.maxHoldHours,
+                ...(o.exitRules ? { exitRules: o.exitRules } : {}),
+                ...(o.rulesHash ? { rulesHash: o.rulesHash } : {}),
+                ...(o.sizing ? { sizing: o.sizing } : {}),
                 ...(o.policy ? { policy: o.policy } : {}),
               };
               b.positions.push(pos);

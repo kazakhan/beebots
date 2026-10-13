@@ -1135,3 +1135,39 @@ test("the review can delete and create strategy templates", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a frozen review (autoApply off) performs no automatic writes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-freeze-"));
+  const store = new Store(":memory:", config());
+  try {
+    const reviewer = new TradeReview({
+      store,
+      laya: { ask: async () => ({ answers: {} }) },
+      model: {},
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => false,
+    });
+    let reverted = 0;
+    reviewer.revertLosers = () => {
+      reverted++;
+    };
+    await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+    });
+    assert.equal(reverted, 0, "autoApply off blocks revertLosers");
+    await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: true,
+    });
+    assert.equal(reverted, 1, "autoApply on runs revertLosers");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

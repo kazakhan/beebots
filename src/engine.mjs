@@ -42,13 +42,33 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.8.0";
+const BUILD = "3.9.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
 // Laya's model context is 8192 tokens, so the decision (state + menu) is bounded
 // to a token-safe subset (held + eligible + top-ranked).
 const DECISION_CANDIDATES = 32;
+// Owner-controlled numeric keys taken from config for the strategy bots. Every
+// other strategy/rule parameter comes from the code defaults + template, so the
+// live config cannot silently override the deployed strategy (3.9.0).
+const OWNER_RULE_KEYS = new Set([
+  "name",
+  "paper",
+  "capital",
+  "maxPositions",
+  "tradeFraction",
+  "stopPct",
+  "trailPct",
+  "trailActivationPct",
+  "maxHoldHours",
+  "maxCostRisk",
+  "minPeriodTurnover",
+  "min24hTurnover",
+  "maxSpreadBps",
+  "cadenceMs",
+  "categories",
+]);
 
 // The control arm has no strategy rubric. Its only job on a held position is to
 // decide whether to keep or close it, using the same evidence the strategies see.
@@ -212,13 +232,22 @@ export class Engine {
         this.config.bots?.[id]?.strategy ??
         STRATEGY_DEFAULTS[id]?.strategy);
     const template = resolveTemplate(strat);
+    // Only these keys are owner-controlled via config; every strategy/rule
+    // parameter comes from the code defaults + template so the live config
+    // cannot silently override the deployed strategy (3.9.0).
+    const configBots = this.config.bots?.[id] ?? {};
+    const configKeys = IDS.includes(id)
+      ? Object.fromEntries(
+          Object.entries(configBots).filter(([k]) => OWNER_RULE_KEYS.has(k)),
+        )
+      : configBots;
     const base = {
       ...(STRATEGY_DEFAULTS[id] ?? {}),
       // Template defaults refine the keys the chosen rule reads (notably
       // minSignalBars for a different timeframe); the bot's own defaults are the
       // base so a template can run on any bot.
       ...(template ? (TEMPLATE_DEFAULTS[template.rule] ?? {}) : {}),
-      ...(this.config.bots?.[id] ?? {}),
+      ...configKeys,
     };
     if (over && !validateParams(`params.${id}`, over))
       Object.assign(base, over);
@@ -230,25 +259,12 @@ export class Engine {
     // of the tunables and cannot be moved off the template by config or an
     // override.
     if (template?.timeframe) base.timeframe = template.timeframe;
-    // Half-Kelly capital allocation for ConnorsThorp (3.8.0): risk per entry is
-    // half the Kelly fraction from the arm's realised win rate, capped at 5% of
-    // the account. Falls back to a 0.5 win rate (which the 5% cap then bounds).
-    if (template?.rule === "connors_thorp") {
-      const perf = this.store.read().bots?.[id]?.performance ?? {};
-      const wins = Number(perf.wins) || 0,
-        losses = Number(perf.losses) || 0;
-      const p = wins + losses > 0 ? wins / (wins + losses) : 0.5;
-      const b = Number(base.rewardRisk) || 1.5;
-      const kelly = (p * (b + 1) - 1) / b;
-      base.riskPct = Math.min(5, Math.max(0.1, (Math.max(0, kelly) / 2) * 100));
-      // Keep three positions affordable: never allocate more than 1/maxPositions
-      // of cash to a single entry.
-      const slots = Number(base.maxPositions) || 3;
-      base.tradeFraction = Math.min(
-        Number(base.tradeFraction) || 1,
-        1 / Math.max(1, slots),
-      );
-    }
+    // Validation sizing (3.9.0): a small FIXED risk budget, not Half-Kelly.
+    // Half-Kelly is disabled - its p=0.5 fallback just selected the 5% cap and
+    // the realised win rate is too small a sample to estimate Kelly. The risk
+    // budget is a code-owned default (0.5%), and the per-entry sizing breakdown
+    // is logged.
+    base.riskPct = 0.5;
     return base;
   }
   // Runtime-wide knobs the review may tune. Defaults are the pre-review values.
@@ -470,6 +486,13 @@ export class Engine {
   }
   async start() {
     this.market.start?.();
+    // Log the effective rules and their source so a drift between the code
+    // defaults, the live config and any overrides is visible at startup (3.9.0).
+    this.store.event("system", {
+      message: "Effective rules",
+      rules: this.effectiveRulesMap(),
+      ruleHash: this.currentRuleHash(),
+    });
     // Explicit config arms live startup; mode remains visible. No exchange mutation in observe.
     this.store.change(
       (s) => {
@@ -686,11 +709,18 @@ export class Engine {
           const generic = v2 ? this.market.snapshot() : [];
           const reviewable = [...(available ?? []), ...generic];
           if (v2) {
-            // Cadence is tunable and defaults to 5 minutes for every bot; the
-            // old fixed 5m/15m/1h buckets are gone, so Keeper can day-trade.
+            // Cadence is tunable and defaults to 5 minutes for every bot. The
+            // assessment is deduplicated on the SIGNAL, not the cadence clock:
+            // one closed signal is acted on once, even across several 5-minute
+            // cycles (3.9.0). With no candidate signal, fall back to the clock.
             const cadence = Number(rules.cadenceMs);
             const interval = cadence >= 30000 ? cadence : runtime.cadenceMs;
-            const bucket = Math.floor(Date.now() / interval);
+            const signalTimes = reviewable.map(
+              (f) => Number(f.signalTime) || 0,
+            );
+            const bucket = signalTimes.length
+              ? Math.max(...signalTimes)
+              : Math.floor(Date.now() / interval);
             if (this.store.read().assessments?.[id] === bucket) continue;
             // No strategy snapshot yet: do NOT consume the cadence (a later
             // cycle in the same bucket must still get a valid assessment), but
@@ -1593,6 +1623,17 @@ export class Engine {
         throw refuse("Risk-sized order below product minimum");
       policy = checked;
     }
+    // Freeze the exit-relevant rule settings onto the position at entry, so a
+    // later config/param change cannot move an open position's exit rules.
+    const er = this.effectiveRules(id);
+    const exitRules = {
+      rule: resolveTemplate(er.strategy)?.rule ?? er.strategy,
+      volumeFloor: Number(er.volumeFloor) || 1,
+      rsiNeutral: Number(er.rsiNeutral) || 50,
+      pauseHours: Number.isFinite(Number(er.pauseHours))
+        ? Number(er.pauseHours)
+        : 4,
+    };
     const order = this.store.reserve({
       bot: id,
       product,
@@ -1601,11 +1642,14 @@ export class Engine {
       reserve,
       reason,
       ...rules,
-      // Every bot now exits on the shared percentage stop / trailing / max-hold
-      // path (3.6.0). The sizing plan is still computed above, but no strategy
-      // policy is attached, so the decider cannot churn and every arm exits
-      // identically to Dice.
+      // Every bot exits on the shared percentage stop / trailing / max-hold path
+      // plus its frozen rule exit. The sizing plan is computed above but no
+      // strategy policy is attached, so the decider cannot churn.
       policy: null,
+      // Audit + freeze (3.9.0).
+      rulesHash: this.currentRuleHash(),
+      exitRules,
+      sizing: side === "BUY" ? (policy?.sizing ?? null) : null,
     });
     try {
       // A paper arm never touches the exchange. Its fill is simulated at the
@@ -1724,7 +1768,8 @@ export class Engine {
                 ? null
                 : this.ruleExit(id, p, (snap ??= this.market.snapshot(id)));
               if (hard || rule || trailing || expired) {
-                if (rule?.pause) this.pauseProduct(id, p.product);
+                if (rule?.pause)
+                  this.pauseProduct(id, p.product, p.exitRules?.pauseHours);
                 await this.execute(
                   id,
                   "SELL",
@@ -1826,21 +1871,24 @@ export class Engine {
   // The reason string ends with "pause" semantics when the coin should be left
   // alone for a while (Orakelia's "stop trading that coin until signals return").
   ruleExit(id, p, snap = null) {
-    const rules = this.effectiveRules(id);
-    const template = resolveTemplate(rules.strategy);
-    const rule = template?.rule ?? rules.strategy;
+    // Use the exit rules frozen onto the position at entry; fall back to the
+    // live rules for legacy positions.
+    const er = p.exitRules ?? null;
+    const rules = er ? null : this.effectiveRules(id);
+    const rule =
+      er?.rule ?? resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
     const rows = snap ?? this.market.snapshot(id);
     const f = rows.find((x) => x.product === p.product);
     if (!f) return null;
     if (rule === "orakelia") {
       if (Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0)
         return { reason: "Momentum faded", pause: true };
-      const floor = Number(rules.volumeFloor) || 1;
+      const floor = Number(er?.volumeFloor ?? rules.volumeFloor) || 1;
       if (Number(f.relativeVolume) < floor)
         return { reason: "Volume dropped", pause: true };
     }
     if (rule === "connors_thorp") {
-      const neutral = Number(rules.rsiNeutral) || 50;
+      const neutral = Number(er?.rsiNeutral ?? rules.rsiNeutral) || 50;
       if (Number.isFinite(f.rsi) && f.rsi >= neutral)
         return { reason: "RSI returned to neutral", pause: false };
     }
@@ -1856,9 +1904,10 @@ export class Engine {
       if (Number(until) > now) set.add(product);
     return set;
   }
-  pauseProduct(id, product) {
-    const hours = Number(this.effectiveRules(id).pauseHours);
-    const until = Date.now() + (Number.isFinite(hours) ? hours : 4) * 3600000;
+  pauseProduct(id, product, hoursOverride = null) {
+    const raw = Number(hoursOverride ?? this.effectiveRules(id).pauseHours);
+    const hours = Number.isFinite(raw) ? raw : 4;
+    const until = Date.now() + hours * 3600000;
     this.store.change(
       (s) => {
         s.bots[id].pauses ??= {};
