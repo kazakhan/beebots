@@ -223,6 +223,12 @@ with the service stopped, since `VACUUM` blocks). Audit rows — `decision`,
 pruned. The summary strip's equity and P/L exclude the paper control arm; only
 real bots are aggregated.
 
+`npm run report [dbPath]` (read-only) prints the per-exit-reason P&L report:
+gross P&L, fees and net P&L split, average winner/loser, profit factor, MFE/MAE,
+holding time, turnover and drawdown per bot, plus count and net **by exit
+reason** and **by config version** (`rulesHash`). Defaults to
+`/var/lib/beebots/beebots.sqlite`.
+
 ## The control arm and Trade Review
 
 A fourth bot, the **control arm**, enters at random from the union of tradable

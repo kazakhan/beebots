@@ -484,6 +484,11 @@ export class Store extends EventEmitter {
             const pos = this.findPosition(b, o.product);
             if (!pos || dec(pos.quantity) < dq)
               throw Error("Sell exceeds bot holdings");
+            // Record the excursion and entry time on the closing order so the
+            // report can compute MFE/MAE and holding time (3.10.0).
+            o.exitPeak = pos.peak ?? null;
+            o.exitTrough = pos.trough ?? null;
+            o.exitOpened = pos.opened ?? null;
             const basis = (dec(pos.cost) * dq) / dec(pos.quantity);
             pos.quantity = sub(pos.quantity, str(dq));
             pos.cost = sub(pos.cost, str(basis));

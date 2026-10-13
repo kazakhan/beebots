@@ -42,7 +42,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.9.1";
+const BUILD = "3.10.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -1748,6 +1748,7 @@ export class Engine {
                 continue;
               }
               const peak = Math.max(Number(p.peak), q.bid, entry);
+              const trough = Math.min(Number(p.trough ?? entry), q.bid, entry);
               this.store.change((s) => {
                 const live = Array.isArray(s.bots[id].positions)
                   ? s.bots[id].positions
@@ -1755,7 +1756,10 @@ export class Engine {
                 const t = live.find(
                   (x) => x.product === p.product && x.opened === p.opened,
                 );
-                if (t) t.peak = String(peak);
+                if (t) {
+                  t.peak = String(peak);
+                  t.trough = String(trough);
+                }
               });
               const hard = q.bid <= entry * (1 - p.stopPct / 100);
               const trailing =

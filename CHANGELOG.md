@@ -14,6 +14,38 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.10.0] - 2026-10-13 - Per-exit-reason P&L report (Phase 1)
+
+The evidence layer the strategy experiments are judged on. `npm run report`
+reconstructs every closed round trip from the order ledger and separates gross
+P&L, fees and net P&L, so "bad entries" can be told apart from "expensive
+turnover" and "exits that surrender good moves".
+
+### Added
+
+- **`src/report.mjs` + `npm run report [dbPath]`** (read-only). Per bot and
+  overall: trades, win rate, gross, fees, net, net%, profit factor, average
+  winner, average loser, average MFE/MAE, average hold time, turnover and max
+  drawdown - plus **count and net by exit reason** and **by config version**
+  (`rulesHash`).
+- **MFE/MAE tracking**: the protection loop now records a position's trough
+  alongside its peak, and the closing order carries `exitPeak`/`exitTrough`/
+  `exitOpened`. New trades get MFE/MAE; historical trades show `—`.
+
+### Notes
+
+- First live run (290 round trips): gross −14.87, **fees 14.32**, net −29.19 -
+  i.e. fees roughly double the loss. Every arm's `stop` exits are net negative
+  while `trail` exits are net positive. `by config version` reads `unknown` for
+  pre-3.9.0 orders (no `rulesHash`).
+
+### Verification
+
+- 319 Node tests pass, up from 316: exit-reason grouping, the round-trip
+  gross/fees/net split with excursions, and the per-bot aggregation.
+
+---
+
 ## [3.9.1] - 2026-10-13 - Fixed risk applies to the strategy bots only
 
 ### Fixed
