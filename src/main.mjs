@@ -59,9 +59,10 @@ try {
   });
   const laya = new Laya(
     config.layaSocket,
-    // Give the batched path headroom: a chunk waits behind the single-GPU lock
-    // and can legitimately take longer than the old per-request default.
-    Math.max(Number(config.layaTimeoutMs) || 0, 60000),
+    // Give the batched path headroom: a chunk waits behind the single-GPU lock,
+    // which is shared with other consumers, and can legitimately take a while.
+    // Floor raised to 90s in 3.12.0.
+    Math.max(Number(config.layaTimeoutMs) || 0, 90000),
     config.dataDir,
   );
   const model = new DecisionModel(

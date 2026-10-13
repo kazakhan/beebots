@@ -734,6 +734,11 @@ export class TradeReview {
     applyWindow = false,
     hourly = [],
   }) {
+    // Advisory review (the owner has turned auto-apply OFF in config): do
+    // nothing at all. The Laya Stage-1 call is a large request that competes
+    // with trading for the shared GPU, and nothing is applied anyway, so skip it
+    // entirely (3.12.0). Resumes the moment auto-apply is turned back on.
+    if (this.config?.review?.autoApply === false) return null;
     const events = this.store
       .recent(2000)
       .filter((e) => e.ts >= since && e.ts < until);

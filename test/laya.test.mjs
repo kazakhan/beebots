@@ -7,10 +7,10 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Laya } from "../src/laya.mjs";
 
-test("queue depth extends bounded inference deadline and congestion avoids submission", async () => {
+test("analysis is not gated by the shared daemon queue_depth", async () => {
   const l = new Laya("unused", 1000);
   let seen;
-  l.ping = async () => ({ ok: true, ready: true, queue_depth: 2 });
+  l.ping = async () => ({ ok: true, ready: true, queue_depth: 9 });
   l.request = async (body, deadline) => {
     seen = deadline;
     return {
@@ -21,12 +21,10 @@ test("queue depth extends bounded inference deadline and congestion avoids submi
       },
     };
   };
+  // A deep shared queue must NOT defer analysis (3.12.0), and the deadline is
+  // the client timeout, not scaled by queue_depth.
   await l.analyze({}, "trend");
-  assert.equal(seen, 3000);
-  l.ping = async () => ({ ok: true, ready: true, queue_depth: 9 });
-  seen = null;
-  await assert.rejects(l.analyze({}, "trend"), /congested/);
-  assert.equal(seen, null);
+  assert.equal(seen, 1000);
 });
 async function fixture(fn) {
   const dir = mkdtempSync(join(tmpdir(), "laya-"));
@@ -257,7 +255,7 @@ test("request surfaces the daemon's error text", async () => {
   }
 });
 
-test("analyzeBatch falls back to serial for a chunk the daemon rejects", async () => {
+test("analyzeBatch degrades a rejected chunk instead of fanning out to serial", async () => {
   const f = await fixture((s) =>
     s.on("data", (data) => {
       const req = JSON.parse(data);
@@ -286,7 +284,8 @@ test("analyzeBatch falls back to serial for a chunk the daemon rejects", async (
       "trend",
     );
     assert.equal(r.results.length, 1);
-    assert.equal(r.results[0].answers.fit.score, 1);
+    assert.ok(r.results[0].error, "chunk degraded, not serial-fallback");
+    assert.ok(!r.results[0].answers, "no per-candidate fallback");
   } finally {
     await f.close();
   }

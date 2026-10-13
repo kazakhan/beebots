@@ -106,8 +106,16 @@ defaults + template, so the live config cannot silently override the deployed
 strategy. The effective rules and rule hash are logged at startup, and each order
 carries a `rulesHash` and a sizing breakdown.
 
-**Frozen when advisory.** With the LLM review off or `autoApply` off, a review
-pass performs **no writes at all** - including backup restoration.
+**Frozen when advisory.** With `review.autoApply` OFF in config the review does
+**nothing at all** (no Laya call, no LLM, no writes) - it skips the Stage-1 Laya
+request that would otherwise compete for the shared GPU. It resumes the moment
+auto-apply is turned back on.
+
+**Living with a shared Laya daemon (3.12.0).** The Laya GPU daemon is shared with
+other services and its `queue_depth` is a global counter, so beebots does **not**
+gate analysis on it; it relies on its own client serialisation and the 90 s
+deadline. A failed analysis batch is retried once then degraded - never fanned
+out to per-candidate calls. Laya congestion is logged as `status`, not `error`.
 
 The review's auto-apply can be turned **off** (advisory only): it then shows
 proposals but changes nothing. The 4-hourly pass is the only one that applies.

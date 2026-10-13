@@ -14,6 +14,39 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [3.12.0] - 2026-10-14 - Survive a loaded shared Laya daemon
+
+The shared Laya GPU daemon is used by other services (do not touch them). Its
+`queue_depth` is a global counter (stuck at ~2300) and it is under load, so
+beebots must stop trusting that signal and stop amplifying a single timeout.
+
+### Changed
+
+- **The advisory review is skipped entirely.** When `review.autoApply` is OFF in
+  config, `review.run()` returns without calling Laya, the LLM, or writing
+  anything. The Stage-1 call is a large request competing for the shared GPU and
+  nothing is applied anyway. Resumes the moment auto-apply is turned back on.
+- **The shared `queue_depth` no longer gates analysis.** `laya.analyze()` dropped
+  the `queue_depth > 8` deferral and the 60 s deadline cap; it uses the client
+  timeout directly. (The counter is global and unreliable under other consumers.)
+- **No serial-fallback storm.** `analyzeBatch()` retries a failed chunk once,
+  then marks the whole chunk degraded - it never fans out to per-candidate calls
+  (which turned one timeout into a congestion storm).
+- **The control arm analyses in batch**, not per held position, so it never hits
+  the single-candidate path.
+- **Quieter telemetry.** Laya timeout/congestion on the strategy and control arms
+  is recorded as `status`, not `error`; real faults (schema/socket) stay `error`.
+- **Laya deadline raised to 90 s** (`config.layaTimeoutMs`, `main.mjs` floor).
+  `config.example.json` updated.
+
+### Verification
+
+- 321 Node tests pass, up from 320: analysis is not gated by `queue_depth`, a
+  rejected chunk degrades instead of serial-falling-back, and an advisory review
+  makes no Laya call.
+
+---
+
 ## [3.11.0] - 2026-10-13 - Phase 4 experiments (one per bot)
 
 Each experiment is on a distinct bot, so the arms do not confound and the report

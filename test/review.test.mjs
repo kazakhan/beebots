@@ -1171,3 +1171,34 @@ test("a frozen review (autoApply off) performs no automatic writes", async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("an advisory review (config autoApply off) does nothing at all", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-advisory-"));
+  const store = new Store(":memory:", config());
+  try {
+    let layaCalls = 0;
+    const reviewer = new TradeReview({
+      store,
+      laya: {
+        ask: async () => {
+          layaCalls++;
+          return { answers: {} };
+        },
+      },
+      model: {},
+      config: { review: { autoApply: false } },
+      dataDir: dir,
+      reviewLlm: () => false,
+    });
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+    });
+    assert.equal(rec, null, "no record");
+    assert.equal(layaCalls, 0, "Laya is never called");
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

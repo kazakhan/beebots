@@ -240,12 +240,10 @@ export class Laya {
     const run = async () => {
       const health = await this.ping();
       if (!health.ready) throw Error("Laya model not ready");
-      const queueDepth = Number.isInteger(health.queue_depth)
-        ? Math.max(0, health.queue_depth)
-        : 0;
-      if (queueDepth > 8)
-        throw Error("Laya queue congested; analysis deferred");
-      const deadline = Math.min(60000, this.timeoutMs * (1 + queueDepth));
+      // The daemon's queue_depth is a global counter shared with other consumers
+      // (and can be unreliable), so it is NOT used to gate analysis (3.12.0).
+      // The request deadline and the client-side serialisation are the limits.
+      const deadline = this.timeoutMs;
       // Compact bounded evidence fits the checkpoint; full precision stays in execution code.
       const compact = { product: state.product, period: state.period };
       for (const key of [
@@ -334,37 +332,31 @@ export class Laya {
       batch_size = 0;
     // The daemon caps one request at BATCH_MAX; split larger sets into
     // sequential chunks (the GPU runs one inference at a time anyway) and merge.
-    // A chunk that fails is retried once, then falls back to serial calls for
-    // that chunk only - a bad chunk never forces the whole bot to serial.
-    const serial = async (chunk) => {
-      for (const c of chunk) {
-        try {
-          const a = await this.analyze(c, style, timeoutMs);
-          results.push({ answers: a.answers, elapsed_s: a.elapsed_s ?? null });
-        } catch (e) {
-          results.push({ error: e.message });
-        }
-      }
-    };
+    // A chunk that fails is retried ONCE; if it still fails the whole chunk is
+    // marked degraded - never fanned out to per-candidate calls, which would
+    // amplify one timeout into a congestion storm (3.12.0).
     for (let i = 0; i < candidates.length; i += BATCH_MAX) {
       const chunk = candidates.slice(i, i + BATCH_MAX);
       const items = chunk.map((state) => ({
         state: compactState(state),
         questions,
       }));
-      let r = null;
-      try {
-        r = await this.batch(items, timeoutMs);
-      } catch {
+      let r = null,
+        lastError = null;
+      for (let attempt = 0; attempt < 2 && !r; attempt++) {
         try {
           r = await this.batch(items, timeoutMs);
-        } catch {
-          await serial(chunk);
-          continue;
+        } catch (e) {
+          lastError = e;
         }
       }
+      if (!r) {
+        for (const _ of chunk)
+          results.push({ error: lastError?.message ?? "batch failed" });
+        continue;
+      }
       if (!Array.isArray(r?.batch) || r.batch.length !== chunk.length) {
-        await serial(chunk);
+        for (const _ of chunk) results.push({ error: "batch shape mismatch" });
         continue;
       }
       for (const res of r.batch) {

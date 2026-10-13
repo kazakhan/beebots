@@ -42,7 +42,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.11.0";
+const BUILD = "3.12.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -1239,6 +1239,16 @@ export class Engine {
           if (isRefusal(e)) {
             this.store.event("veto", { bot: id, reason: e.message });
             this.setError(`analysis:${id}`, null);
+          } else if (/laya/i.test(e.message)) {
+            // A Laya timeout / congestion behind the shared GPU is degraded
+            // service, not a fault: record quietly so the card is not a wall of
+            // red while the daemon is loaded (3.12.0).
+            this.setError(`analysis:${id}`, null);
+            this.store.event("status", {
+              bot: id,
+              component: "analysis",
+              message: e.message,
+            });
           } else {
             this.setError(`analysis:${id}`, e.message);
             this.store.event("error", {
@@ -1259,6 +1269,13 @@ export class Engine {
           if (isRefusal(e)) {
             this.store.event("veto", { bot: CONTROL_ID, reason: e.message });
             this.setError(`analysis:${CONTROL_ID}`, null);
+          } else if (/laya/i.test(e.message)) {
+            this.setError(`analysis:${CONTROL_ID}`, null);
+            this.store.event("status", {
+              bot: CONTROL_ID,
+              component: "analysis",
+              message: e.message,
+            });
           } else {
             this.setError(`analysis:${CONTROL_ID}`, e.message);
             this.store.event("error", {
@@ -1374,29 +1391,42 @@ export class Engine {
       }
     }
     if (!candidates.length) return;
-    // Same Laya policy as the strategy loop: optional, and a failure degrades
-    // the candidate rather than dropping it.
-    let analyzed = candidates;
+    // Same Laya policy as the strategy loop: batched (never per-candidate, so it
+    // cannot hit the single-candidate path or amplify a timeout), optional, and
+    // a failure degrades the candidate rather than dropping it (3.12.0).
+    let analyzed = [...candidates];
     if (this.config.layaEnabled !== false) {
-      analyzed = [];
-      for (const f of candidates) {
-        try {
-          const analysis = await this.laya.analyze(f, id);
-          this.store.event("analysis", {
-            bot: id,
-            product: f.product,
-            sourceTime: f.at,
-            ...analysis,
+      try {
+        const batch = await this.laya.analyzeBatch(candidates, id);
+        if (batch?.results?.length === candidates.length) {
+          candidates.forEach((f, i) => {
+            const r = batch.results[i];
+            if (r && !r.error) {
+              this.store.event("analysis", {
+                bot: id,
+                product: f.product,
+                sourceTime: f.at,
+                answers: r.answers,
+                elapsed_s: r.elapsed_s,
+              });
+              analyzed[i] = {
+                ...f,
+                analysis: { answers: r.answers, elapsed_s: r.elapsed_s },
+              };
+            } else {
+              this.store.event("status", {
+                bot: id,
+                product: f.product,
+                message: r?.error ?? "batch item failed",
+              });
+            }
           });
-          analyzed.push({ ...f, analysis });
-        } catch (e) {
-          this.store.event("status", {
-            bot: id,
-            product: f.product,
-            message: e.message,
-          });
-          analyzed.push(f);
         }
+      } catch (e) {
+        this.store.event("status", {
+          bot: id,
+          message: `Control batch unavailable: ${e.message}`,
+        });
       }
     }
     if (!analyzed.length) return;

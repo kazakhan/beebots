@@ -7,7 +7,7 @@
   "publicOrigin": "https://example.com",
   "dataDir": "/var/lib/beebots",
   "layaSocket": "/run/laya/laya.sock",
-  "layaTimeoutMs": 30000,
+  "layaTimeoutMs": 90000,
   "coinbasePython": "/opt/coinbase/venv/bin/python",
   "coinbaseKeyFile": "",
   "coinbasePortfolioId": "",
