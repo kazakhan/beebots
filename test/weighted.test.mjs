@@ -6,6 +6,7 @@ import {
   weightsFor,
   chooseWeightedMove,
   executable,
+  exitWouldFire,
   SEED_WEIGHTS,
 } from "../src/weighted.mjs";
 import { backtestWeighted } from "../src/backtest.mjs";
@@ -123,4 +124,44 @@ test("backtestWeighted is deterministic and bounded", () => {
   const b = backtestWeighted({ bot: "trend", frames, rules: {} });
   assert.deepEqual(a, b);
   assert.ok(a.trades <= 25);
+});
+
+test("exitWouldFire matches the code exit for each rule", () => {
+  assert.equal(
+    exitWouldFire("orakelia", { momentum7dPct: 1, momentum24hPct: -1 }),
+    true,
+  );
+  assert.equal(
+    exitWouldFire("orakelia", { momentum7dPct: 1, momentum24hPct: 1 }),
+    false,
+  );
+  assert.equal(exitWouldFire("connors_thorp", { rsi: 55 }, {}), true);
+  assert.equal(exitWouldFire("connors_thorp", { rsi: 20 }, {}), false);
+  assert.equal(exitWouldFire("breakout_liquid", { rsi: 90 }), false);
+});
+
+test("chooseWeightedMove never buys a candidate the rule exit would close", () => {
+  const wouldFade = { ...strong, momentum24hPct: -2 };
+  const read = chooseWeightedMove({
+    bot: "trend",
+    rule: "orakelia",
+    candidates: [wouldFade],
+    positions: [],
+    maxPositions: 3,
+    rules: {},
+  });
+  assert.equal(read.action, "SKIP");
+});
+
+test("chooseWeightedMove skips paused products", () => {
+  const read = chooseWeightedMove({
+    bot: "trend",
+    rule: "orakelia",
+    candidates: [strong],
+    positions: [],
+    maxPositions: 3,
+    rules: {},
+    paused: new Set(["AAA-USDC"]),
+  });
+  assert.equal(read.action, "SKIP");
 });

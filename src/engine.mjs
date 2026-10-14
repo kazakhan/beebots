@@ -26,6 +26,7 @@ import {
 import { isRefusal, refuse } from "./refusal.mjs";
 import {
   chooseWeightedMove,
+  exitWouldFire,
   SEED_WEIGHTS,
   SEED_SCORE_MIN,
 } from "./weighted.mjs";
@@ -48,7 +49,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "4.0.1";
+const BUILD = "4.0.2";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -1118,12 +1119,16 @@ export class Engine {
             // The weighted model decides in code: no Laya analysis, no LLM. The
             // score replaces the template entry, so mark the chosen candidate
             // eligible for the execution layer (geometry is still re-checked).
+            const rule =
+              resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
             const read = chooseWeightedMove({
               bot: id,
+              rule,
               candidates,
               positions,
               maxPositions,
               rules,
+              paused: this.pausedProducts(id),
             });
             if (read.action === "BUY") {
               const pick = candidates.find((c) => c.product === read.product);
@@ -1873,8 +1878,17 @@ export class Engine {
                 ? null
                 : this.ruleExit(id, p, (snap ??= this.market.snapshot(id)));
               if (hard || rule || trailing || expired) {
-                if (rule?.pause)
-                  this.pauseProduct(id, p.product, p.exitRules?.pauseHours);
+                // A stop or a rule exit means the thesis broke: put the coin in
+                // a cooldown so it is not re-bought on the next signal (4.0.2).
+                // A trailing-profit or max-hold exit leaves it free to re-enter.
+                if (hard || rule?.pause) {
+                  const cd = Number(this.effectiveRules(id).exitCooldownHours);
+                  this.pauseProduct(
+                    id,
+                    p.product,
+                    Number.isFinite(cd) ? cd : 1,
+                  );
+                }
                 await this.execute(
                   id,
                   "SELL",
@@ -1979,27 +1993,32 @@ export class Engine {
     // Use the exit rules frozen onto the position at entry; fall back to the
     // live rules for legacy positions.
     const er = p.exitRules ?? null;
-    const rules = er ? null : this.effectiveRules(id);
+    const live = er ? null : this.effectiveRules(id);
     const rule =
-      er?.rule ?? resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
+      er?.rule ?? resolveTemplate(live?.strategy)?.rule ?? live?.strategy;
+    // Minimum hold: a rule exit may not fire until the position has been held at
+    // least one signal bar, so a same-bar feature flip cannot churn (4.0.2).
+    const tf = live?.timeframe ?? this.effectiveRules(id).timeframe;
+    if (Date.now() - Number(p.opened) < (TIME_MS[tf] ?? 900000)) return null;
     const rows = snap ?? this.market.snapshot(id);
     const f = rows.find((x) => x.product === p.product);
     if (!f) return null;
+    // Shared with the entry: the same predicate that blocks a buy is the one that
+    // closes the position (4.0.2), so entry and exit can never disagree.
+    if (exitWouldFire(rule, f, er ?? live))
+      return {
+        reason:
+          rule === "orakelia" ? "Momentum faded" : "RSI returned to neutral",
+        pause: true,
+      };
     if (rule === "orakelia") {
-      if (Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0)
-        return { reason: "Momentum faded", pause: true };
       // 3.11.0 experiment: the volume-drop exit is off by default.
-      const volumeDrop = er?.volumeDropExit ?? rules.volumeDropExit;
+      const volumeDrop = er?.volumeDropExit ?? live?.volumeDropExit;
       if (volumeDrop !== false) {
-        const floor = Number(er?.volumeFloor ?? rules.volumeFloor) || 1;
+        const floor = Number(er?.volumeFloor ?? live?.volumeFloor) || 1;
         if (Number(f.relativeVolume) < floor)
           return { reason: "Volume dropped", pause: true };
       }
-    }
-    if (rule === "connors_thorp") {
-      const neutral = Number(er?.rsiNeutral ?? rules.rsiNeutral) || 50;
-      if (Number.isFinite(f.rsi) && f.rsi >= neutral)
-        return { reason: "RSI returned to neutral", pause: false };
     }
     return null;
   }

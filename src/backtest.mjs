@@ -4,12 +4,20 @@
 // the bot's own exits, so the Trade Review can accept a weight change only if it
 // improves net P&L. It is a SIMULATION over closed bars (bid/ask approximated by
 // the bar close) and is bounded (product/eval/time caps). No orders, no models.
-import { aggregate, atr, ema, median, rsi } from "./strategy-v2.mjs";
+import {
+  aggregate,
+  atr,
+  ema,
+  median,
+  rsi,
+  resolveTemplate,
+} from "./strategy-v2.mjs";
 import {
   weightsFor,
   scoreMinFor,
   executable,
   scoreCandidate,
+  exitWouldFire,
 } from "./weighted.mjs";
 
 const TAKER = 0.006; // round-trip fee assumption (each side), like the live taker tier
@@ -68,6 +76,7 @@ function featuresAt(sig, hourAll, i, bot) {
 
 // The exit that fires next for a position opened at `entry` on signal bar `i`.
 function exitAt(sig, hourAll, i, entry, rules, bot) {
+  const rule = resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
   const stop = entry * (1 - (Number(rules.stopPct) || 3) / 100);
   const trailAct = Number(rules.trailActivationPct) || 4;
   const trailPct = Number(rules.trailPct) || 3;
@@ -85,24 +94,19 @@ function exitAt(sig, hourAll, i, entry, rules, bot) {
   for (let j = i + 1; j <= end; j++) {
     const bar = sig[j];
     peak = Math.max(peak, bar.high);
-    if (bar.low <= stop) return { exit: stop, reason: "stop" };
+    if (bar.low <= stop) return { exit: stop, reason: "stop", j };
     if (
       peak >= entry * (1 + trailAct / 100) &&
       bar.low <= peak * (1 - trailPct / 100)
     )
-      return { exit: peak * (1 - trailPct / 100), reason: "trail" };
+      return { exit: peak * (1 - trailPct / 100), reason: "trail", j };
     // Rule exit (Keeper fade / Spark RSI-neutral).
     const f = featuresAt(sig, hourAll, j, bot);
-    if (
-      bot === "trend" &&
-      (Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0)
-    )
-      return { exit: bar.close, reason: "fade" };
-    if (bot === "momentum" && Number.isFinite(f.rsi) && f.rsi >= 50)
-      return { exit: bar.close, reason: "rsi" };
-    if (j >= i + maxHoldBars) return { exit: bar.close, reason: "max-hold" };
+    if (exitWouldFire(rule, f, rules))
+      return { exit: bar.close, reason: "rule", j };
+    if (j >= i + maxHoldBars) return { exit: bar.close, reason: "max-hold", j };
   }
-  return { exit: sig[end].close, reason: "end" };
+  return { exit: sig[end].close, reason: "end", j: end };
 }
 
 export function backtestWeighted({
@@ -117,6 +121,8 @@ export function backtestWeighted({
   const hourAll = frames.hour ?? [];
   const weights = weightsFor(bot, rules);
   const min = scoreMinFor(bot, rules);
+  const rule = resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
+  const cooldownMs = (Number(rules.exitCooldownHours) || 1) * 3600000;
   const warmup = Math.max(20, 15);
   const start = Math.max(warmup, sig.length - bars);
   let net = 0,
@@ -124,13 +130,21 @@ export function backtestWeighted({
     fees = 0,
     trades = 0,
     wins = 0,
-    losses = 0;
+    losses = 0,
+    cooldownUntil = 0;
   for (let i = start; i < sig.length - 1 && trades < maxTrades; i++) {
+    if (sig[i].time < cooldownUntil) continue;
     const f = featuresAt(sig, hourAll, i, bot);
     if (!executable(f, rules)) continue;
     if (scoreCandidate(f, weights) < min) continue;
+    // Never enter a position the rule exit would close immediately (4.0.2).
+    if (exitWouldFire(rule, f, rules)) continue;
     const entry = sig[i].close;
-    const { exit } = exitAt(sig, hourAll, i, entry, rules, bot);
+    const { exit, reason, j } = exitAt(sig, hourAll, i, entry, rules, bot);
+    // A stop or a rule exit puts the product in a cooldown mirroring the live
+    // engine, so the backtest cannot reward churn (4.0.2).
+    if (reason === "stop" || reason === "rule")
+      cooldownUntil = sig[j].time + cooldownMs;
     const g = (exit / entry - 1) * 100;
     const fee = TAKER * 200;
     net += g - fee;

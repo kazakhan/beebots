@@ -60,6 +60,7 @@ export const PARAM_SCHEMA = {
   wRank: { min: -10, max: 10 },
   scoreMin: { min: -10, max: 10 },
   pauseHours: { min: 0, max: 168, int: true },
+  exitCooldownHours: { min: 0, max: 168, int: true },
   topFraction: { min: 0.05, max: 1 },
   minBreadth: { min: 1, max: 100, int: true },
   riskPct: { min: 0.1, max: 3 },

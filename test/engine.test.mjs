@@ -565,7 +565,7 @@ test("ruleExit fades Orakelia when momentum turns and pauses the coin", () => {
     });
     const r2 = e2.ruleExit("momentum", { product: "X-USDC" });
     assert.equal(r2.reason, "RSI returned to neutral");
-    assert.equal(r2.pause, false);
+    assert.equal(r2.pause, true);
   } finally {
     store.close();
   }

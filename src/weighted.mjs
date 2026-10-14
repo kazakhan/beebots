@@ -144,25 +144,45 @@ export function scoreCandidate(f, weights) {
   return s;
 }
 
+// Whether the code rule exit would fire for this feature snapshot. Shared by the
+// entry (do not buy a position that would be closed immediately) and the exit
+// (RuleExit), so entry and exit can never disagree (4.0.2).
+export function exitWouldFire(rule, f, rules = {}) {
+  if (rule === "orakelia")
+    return Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0;
+  if (rule === "connors_thorp") {
+    const neutral = Number(rules.rsiNeutral) || 50;
+    return Number.isFinite(f.rsi) && Number(f.rsi) >= neutral;
+  }
+  return false;
+}
+
 // The weighted decision: buy the best-scoring executable candidate while room
 // remains and the score clears the threshold; otherwise skip. Held positions are
-// managed by code exits, so no HOLD/SELL is produced here.
+// managed by code exits, so no HOLD/SELL is produced here. Candidates that the
+// rule exit would immediately close, or that are in a post-exit cooldown, are
+// never bought.
 export function chooseWeightedMove({
   bot,
+  rule = null,
   candidates = [],
   positions = [],
   maxPositions = 1,
   rules = {},
+  paused = null,
 }) {
   const weights = weightsFor(bot, rules);
   const min = scoreMinFor(bot, rules);
   const held = new Set(positions.map((p) => p.product));
   const room = positions.length < Number(maxPositions || 1);
+  const pausedSet = paused instanceof Set ? paused : new Set(paused ?? []);
   let best = null;
   for (const c of candidates) {
     if (!c || typeof c.product !== "string") continue;
     if (held.has(c.product)) continue;
+    if (pausedSet.has(c.product)) continue;
     if (!executable(c, rules)) continue;
+    if (exitWouldFire(rule, c, rules)) continue;
     const score = scoreCandidate(c, weights);
     if (!best || score > best.score) best = { product: c.product, score };
   }

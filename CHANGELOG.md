@@ -14,6 +14,42 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [4.0.2] - 2026-10-14 - Align entry with exit; stop the churn
+
+Trend was buying and selling the same pair within 10-16 seconds (live orders at
+11:04:46 BUY PEPE -> 11:05:00 SELL "Momentum faded"). Two structural bugs.
+
+### Fixed
+
+- **Entry and exit now share one predicate.** The weighted entry did not require
+  the conditions the code rule exit checks, so it bought coins whose 24h momentum
+  was negative; the Keeper rule exit (`7d<=0 or 24h<=0`) then closed the position
+  seconds later. `exitWouldFire()` (`weighted.mjs`) is now used by **both** the
+  entry (`chooseWeightedMove` skips any candidate it would immediately close) and
+  `ruleExit`, so they can never disagree.
+- **The weighted engine now honours the per-coin pause.** The pause filter was
+  applied only to the menu path; the weighted branch scored the raw candidate
+  list, so paused coins were re-bought. `chooseWeightedMove` now takes `paused`
+  and skips those products.
+
+### Added
+
+- **Post-exit cooldown on stop/rule exits** (`exitCooldownHours`, default 1 h):
+  a stopped-out or rule-exited coin cannot be re-bought for an hour. Trailing
+  and max-hold exits do not pause. Tunable in the override schema.
+- **Minimum hold of one signal bar** before a rule exit may fire, so a same-bar
+  feature flip cannot churn.
+- The **backtest mirrors this** (entry gate + cooldown), so the weight review
+  cannot reward a churn strategy.
+
+### Verification
+
+- 333 Node tests pass, up from 330: `exitWouldFire` per rule, the entry skipping
+  candidates that would immediately exit, and the pause filter in the weighted
+  choice.
+
+---
+
 ## [4.0.1] - 2026-10-14 - Fast, bounded shutdown
 
 SIGTERM could stall for tens of seconds (and end in SIGKILL) because shutdown
