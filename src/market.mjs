@@ -61,8 +61,8 @@ export function features(product, c15, hour) {
     return15mPct: (last.close / previous.close - 1) * 100,
   };
 }
-export function eligibility(id, f, rules) {
-  if (f.strategyVersion) return entryEligible(id, f);
+export function eligibility(id, f, rules, opts) {
+  if (f.strategyVersion) return entryEligible(id, f, opts);
   if (
     f.periodTurnover < rules.minPeriodTurnover ||
     f.turnover24h < rules.min24hTurnover ||

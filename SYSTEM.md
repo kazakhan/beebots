@@ -76,9 +76,28 @@ and must never be coupled:
    turn off the LLM review. If the LLM review is on but unavailable or its reply
    is unusable, the review falls back to Laya's self-tune — it never fails.
 
-## Strategy pool and rotation
+## The weighted trading model (4.0.0)
 
-Each bot runs one **pinned strategy template** from a **dynamic pool**
+Trading is decided by **code, not a model call**. Each candidate is turned into a
+normalised feature vector (`src/weighted.mjs`, fixed clip ranges) and scored
+`Σ w·x`; the engine buys the best-scoring **executable** candidate while room
+remains and the score clears `scoreMin`, else SKIP. Held positions still exit
+through the code exits (stop / trailing / max-hold / rule exit). The `weighted`
+engine is the default; `analyzeBatch` and `laya.decide` are **not** used in the
+trade loop.
+
+- **Weights** are per bot (`wM7`, `wM24`, `wVol`, `wRsiLow`, `wReversion`,
+  `wPriceUp`, `wEma20`, `wEma50`, `wBreakout`, `wLiquidity`, `wRank`, `scoreMin`),
+  seeded from the templates the bots ran on, and live in `params.<bot>` so they
+  are visible and revertible.
+- **The template no longer gates the entry** for the weighted engine; only the
+  execution geometry (sane stop, anti-chase cap) applies.
+- **Laya and the LLM are used only by the review.** The 4-hourly review proposes
+  at most one bounded weight step per bot; a change is applied only if its
+  **backtest** (`src/backtest.mjs`, deterministic replay over the candles held,
+  net P&L after fees) beats the current weights by ≥0.1.
+
+## Strategy pool and rotationEach bot runs one **pinned strategy template** from a **dynamic pool**
 (`getTemplates()` in `strategy-v2.mjs`). A template is a **coded rule + universe +
 timeframe**; the pool holds `orakelia`, `connors_thorp`, `breakout_liquid`,
 `hexchaser`, `market_mover` and `trend_pullback`. The three bots are **pinned**

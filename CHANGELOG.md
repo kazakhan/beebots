@@ -14,6 +14,48 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [4.0.0] - 2026-10-14 - Weighted trading model; Laya for evaluation
+
+Trading no longer calls a model per cycle. A code-side **weighted score** decides
+entries; Laya and the LLM are used only by the 4-hourly review, which tunes the
+weights and **backtests** every change.
+
+### Added
+
+- **Weighted engine (`weighted`), the new default.** For each candidate a
+  normalised feature vector is scored (`Σ w·x + threshold`); the engine buys the
+  best-scoring executable candidate while room remains, else SKIP. **No
+  `analyzeBatch` and no `laya.decide` in the trade loop.** Held positions still
+  exit via the existing code exits.
+- **`src/weighted.mjs`**: per-bot seed weights (Keeper = momentum+volume, Spark =
+  RSI mean-reversion, Scout = breakout), fixed-clip feature normalisation, and
+  `chooseWeightedMove`.
+- **`src/backtest.mjs`**: a deterministic replay over the candles held that
+  simulates the bot's own exits and returns net P&L after fees.
+- **Weights as params**: `wM7/wM24/wVol/wRsiLow/wReversion/wPriceUp/wEma20/
+  wEma50/wBreakout/wLiquidity/wRank` + `scoreMin`, seeded into `effectiveRules`
+  so the review can see and tune them.
+
+### Changed
+
+- **The Trade Review gates weight changes by the backtest.** A proposal touching
+  a weight or `scoreMin` is applied only if its backtested net P&L beats the
+  current weights by ≥0.1. Self-tune adds one bounded weight step per bot.
+- **Entry is the score.** The template's setup gates no longer gate the weighted
+  engine; only the execution geometry (sane stop, anti-chase cap) remains.
+- **Every candidate is quoted** for the weighted engine so it can score the full
+  field.
+- `weighted` is first in the dashboard engine selector; `laya`/`llm` remain for
+  the review. Templates remain as fixed feature providers.
+
+### Verification
+
+- 329 Node tests pass, up from 321: the scorer/normalisation, executable gating,
+  the weighted choice, backtest determinism, the backtest weight gate, and the
+  weight-param schema.
+
+---
+
 ## [3.12.0] - 2026-10-14 - Survive a loaded shared Laya daemon
 
 The shared Laya GPU daemon is used by other services (do not touch them). Its

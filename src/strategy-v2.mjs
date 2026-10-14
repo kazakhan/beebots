@@ -777,16 +777,21 @@ export function rankMomentum(
 }
 // Why a candidate is not an executable entry, or null when it is. Used both to
 // decide eligibility and to state the exact reason a chosen entry was declined.
-export function entryRejection(id, f) {
-  if (f.setupEligible !== true) return "Setup no longer qualifies";
+export function entryRejection(id, f, { weighted = false } = {}) {
+  // The weighted engine decides the entry from the score, so the template's own
+  // setup gates do not apply; only the execution geometry and the anti-chase cap
+  // remain.
+  if (!weighted && f.setupEligible !== true) return "Setup no longer qualifies";
   // The momentum-rotation templates buy strength by design, so they are exempt
   // from the anti-chase maxEntry cap (size is still risk-capped by the stop).
   if (!f.rotation && !(Number.isFinite(f.ask) && f.ask <= f.maxEntry))
     return "Entry too extended (ask past the max entry)";
   if (!(f.ask > f.stopPrice)) return "Entry below the stop";
   // The channel rule belongs to the breakout setup, not to the bot id: only
-  // applies when the candidate actually carries a channel.
+  // applies when the candidate actually carries a channel, and never for the
+  // weighted engine (the score governs the breakout entry).
   if (
+    !weighted &&
     id === "breakout" &&
     Number.isFinite(f.channelHigh) &&
     !(f.bid > f.channelHigh)
@@ -794,8 +799,8 @@ export function entryRejection(id, f) {
     return "Breakout lost the channel";
   return null;
 }
-export function entryEligible(id, f) {
-  return entryRejection(id, f) === null;
+export function entryEligible(id, f, opts) {
+  return entryRejection(id, f, opts) === null;
 }
 export function walk(levels, quantity) {
   let remaining = quantity,

@@ -15,6 +15,13 @@
 import { entryEligible } from "./strategy-v2.mjs";
 
 export const ENGINES = {
+  weighted: {
+    id: "weighted",
+    label: "Weighted (code)",
+    jev: false,
+    laya: false,
+    llm: false,
+  },
   jev: {
     id: "jev",
     label: "Jev (TypeSafe)",
@@ -46,13 +53,20 @@ export const ENGINES = {
   },
 };
 
-// The default for an install that has never chosen one. Laya decides directly
-// (local and free); the LLM is reserved for the hourly review.
-export const DEFAULT_ENGINE = "laya";
+// The default for an install that has never chosen one. The weighted model
+// decides trading in code (no per-cycle model call); Laya and the LLM are used
+// only by the Trade Review.
+export const DEFAULT_ENGINE = "weighted";
 
-// Order shown in the dashboard: the two System One engines first, then the LLM,
-// then the two hybrids.
-export const ENGINE_ORDER = ["jev", "laya", "llm", "jev+llm", "laya+llm"];
+// Order shown in the dashboard: the code engine first, then the others.
+export const ENGINE_ORDER = [
+  "weighted",
+  "jev",
+  "laya",
+  "llm",
+  "jev+llm",
+  "laya+llm",
+];
 
 export function isEngine(id) {
   return typeof id === "string" && Object.hasOwn(ENGINES, id);

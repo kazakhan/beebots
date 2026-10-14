@@ -24,6 +24,12 @@ import {
   setTemplates,
 } from "./strategy-v2.mjs";
 import { isRefusal, refuse } from "./refusal.mjs";
+import {
+  chooseWeightedMove,
+  SEED_WEIGHTS,
+  SEED_SCORE_MIN,
+} from "./weighted.mjs";
+import { backtestWeighted } from "./backtest.mjs";
 import { closedRoundTrips, losingStreaks } from "./review.mjs";
 import {
   readJsonOverride,
@@ -42,7 +48,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "3.12.0";
+const BUILD = "4.0.0";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -247,6 +253,12 @@ export class Engine {
       // minSignalBars for a different timeframe); the bot's own defaults are the
       // base so a template can run on any bot.
       ...(template ? (TEMPLATE_DEFAULTS[template.rule] ?? {}) : {}),
+      // The weighted model's seed weights and threshold, so they are visible to
+      // the review and tunable like any other param (4.0.0).
+      ...(SEED_WEIGHTS[id] ?? {}),
+      ...(Number.isFinite(SEED_SCORE_MIN[id])
+        ? { scoreMin: SEED_SCORE_MIN[id] }
+        : {}),
       ...configKeys,
     };
     if (over && !validateParams(`params.${id}`, over))
@@ -313,6 +325,29 @@ export class Engine {
     if (isEngine(stored)) return stored;
     if (isEngine(this.config.engine)) return this.config.engine;
     return this.config.layaEnabled === false ? "llm" : "laya+llm";
+  }
+  // Whether entry must be judged by the weighted score rather than the template
+  // setup gates. Folded into eligibility checks at execution time.
+  eligibilityOpts() {
+    return { weighted: this.engineId() === "weighted" };
+  }
+  // Deterministic backtest of a bot's weighted model over a bounded sample of the
+  // candles held, used to gate weight changes (4.0.0). Sums net P&L across
+  // products; side-effect free.
+  backtestBot(bot, rules) {
+    const frames = this.market?.frames;
+    if (!frames?.size) return { net: 0, trades: 0 };
+    let net = 0,
+      trades = 0,
+      n = 0;
+    for (const [, f] of frames) {
+      if (n >= 40) break;
+      n++;
+      const r = backtestWeighted({ bot, frames: f, rules });
+      net += r.net;
+      trades += r.trades;
+    }
+    return { net: Number(net.toFixed(3)), trades };
   }
   // Compact, bounded market + position state for a System One engine. It is
   // evidence, not full precision: the execution layer holds the exact numbers.
@@ -607,6 +642,7 @@ export class Engine {
         apply,
         applyWindow,
         hourly: Array.isArray(s.hourlyReviews) ? s.hourlyReviews : [],
+        backtest: (bot, rules) => this.backtestBot(bot, rules),
       });
       this.setError("review", null);
     } catch (e) {
@@ -699,6 +735,9 @@ export class Engine {
           const maxPositions = this.store.maxPositions(id);
           const atCapacity = positions.length >= maxPositions;
           const v2 = this.config.strategyVersion === 2;
+          // The weighted engine decides in code; it needs a live quote for every
+          // candidate (not just the template-eligible ones) to score/execute.
+          const weightedEngine = this.engineId() === "weighted";
           // A position written before the policy layer has no saved exit plan and
           // is reviewed from the generic feature rows on the fast cadence.
           const legacyPosition = v2 && positions.some((p) => !p.policy);
@@ -836,7 +875,8 @@ export class Engine {
               // live quote: buildMenu gates BUY on entryEligible, which needs
               // bid/ask, and a non-eligible candidate can only ever be SKIP.
               // Quoting the whole slice would make a large candidate cap slow.
-              if (!f.setupEligible && !f.held) {
+              // The weighted engine scores every candidate, so it quotes all.
+              if (!weightedEngine && !f.setupEligible && !f.held) {
                 fresh.push(f);
                 continue;
               }
@@ -1074,6 +1114,29 @@ export class Engine {
               evidence,
             });
             llmUsage = true;
+          } else if (weightedEngine) {
+            // The weighted model decides in code: no Laya analysis, no LLM. The
+            // score replaces the template entry, so mark the chosen candidate
+            // eligible for the execution layer (geometry is still re-checked).
+            const read = chooseWeightedMove({
+              bot: id,
+              candidates,
+              positions,
+              maxPositions,
+              rules,
+            });
+            if (read.action === "BUY") {
+              const pick = candidates.find((c) => c.product === read.product);
+              if (pick) pick.setupEligible = true;
+            }
+            d = {
+              action: read.action,
+              product: read.product,
+              reason: `Weighted score ${Number(read.score ?? 0).toFixed(3)} (min ${read.min})`,
+              model: "weighted",
+              engine,
+              usage: null,
+            };
           } else {
             // The engine itself decides: one System One choice over the valid
             // moves. Jev and Laya share the contract; a failed call holds the
@@ -1542,7 +1605,10 @@ export class Engine {
       if (Date.now() - evidence.at > this.config.maxAnalysisAgeMs)
         throw refuse("Analysis expired before execution");
       // The control arm has no setup to qualify; its randomness is the point.
-      if (!evidence.control && !eligibility(id, { ...evidence, ...q }, rules)) {
+      if (
+        !evidence.control &&
+        !eligibility(id, { ...evidence, ...q }, rules, this.eligibilityOpts())
+      ) {
         const merged = { ...evidence, ...q };
         // Say exactly which entry condition failed, rather than implying a
         // change that did not happen.
@@ -1631,7 +1697,12 @@ export class Engine {
     if (
       side === "BUY" &&
       !evidence.control &&
-      !eligibility(id, { ...evidence, ...freshQuote }, rules)
+      !eligibility(
+        id,
+        { ...evidence, ...freshQuote },
+        rules,
+        this.eligibilityOpts(),
+      )
     )
       throw refuse("Entry changed during validation");
     if (side === "BUY" && policy) {

@@ -14,7 +14,14 @@ import {
 
 test("the engine catalogue is complete and ordered for the dashboard", () => {
   const ids = engineCatalog().map((e) => e.id);
-  assert.deepEqual(ids, ["jev", "laya", "llm", "jev+llm", "laya+llm"]);
+  assert.deepEqual(ids, [
+    "weighted",
+    "jev",
+    "laya",
+    "llm",
+    "jev+llm",
+    "laya+llm",
+  ]);
   assert.ok(isEngine(DEFAULT_ENGINE));
   assert.equal(engineLabel("jev+llm"), "Jev + LLM");
   // Every catalogue entry carries the flags the browser uses to shape the form.

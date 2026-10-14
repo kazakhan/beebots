@@ -54,6 +54,7 @@ import {
   setTemplates,
 } from "./strategy-v2.mjs";
 import { selfTune } from "./self-tune.mjs";
+import { WEIGHT_KEYS } from "./weighted.mjs";
 import { VARIANT_NAMES } from "./analysis-variants.mjs";
 import {
   ALLOWED_TARGETS,
@@ -733,6 +734,7 @@ export class TradeReview {
     apply = true,
     applyWindow = false,
     hourly = [],
+    backtest = null,
   }) {
     // Advisory review (the owner has turned auto-apply OFF in config): do
     // nothing at all. The Laya Stage-1 call is a large request that competes
@@ -980,6 +982,30 @@ export class TradeReview {
             : null;
         if (armOf !== focusArm)
           gate.reasons.push(`Focused review: only ${focusArm} may be changed`);
+      }
+      // Weighted-model changes (4.0.0): a change to a bot's weights or score
+      // threshold must beat the current weights on a deterministic backtest over
+      // the candles held, by a margin, before it is applied.
+      if (!isRevert && backtest && p?.target?.startsWith("params.")) {
+        try {
+          const proposedParams = JSON.parse(p.proposed);
+          if (
+            Object.keys(proposedParams ?? {}).some(
+              (k) => WEIGHT_KEYS.includes(k) || k === "scoreMin",
+            )
+          ) {
+            const arm = p.target.slice("params.".length);
+            const currentParams = JSON.parse(this.currentFor(p.target));
+            const cur = backtest(arm, currentParams);
+            const next = backtest(arm, proposedParams);
+            if (!(Number(next.net) >= Number(cur.net) + 0.1))
+              gate.reasons.push(
+                `Backtest: weighted net ${next.net} vs current ${cur.net} (needs +0.1)`,
+              );
+          }
+        } catch (e) {
+          gate.reasons.push(`Backtest failed: ${e.message}`);
+        }
       }
       gate.ok = gate.ok && gate.reasons.length === 0;
       let applied = false;

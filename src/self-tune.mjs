@@ -10,6 +10,13 @@ import { VARIANT_NAMES } from "./analysis-variants.mjs";
 
 const BOTS = ["breakout", "trend", "momentum"];
 
+// The weighted model's tuned knob per bot: one bounded weight step per review.
+const WEIGHT_NUDGE = {
+  trend: "wM7",
+  momentum: "wRsiLow",
+  breakout: "wBreakout",
+};
+
 // Loosening direction per bot (one step): make the gates easier to pass. The
 // keys are the ones each bot's pinned template actually reads (3.8.0).
 const LOOSEN = {
@@ -48,6 +55,13 @@ export function selfTune({ answers = {}, current = () => ({}) } = {}) {
     for (const [key, delta] of Object.entries(LOOSEN[bottleneck])) {
       const v = step(`params.${bottleneck}`, key, delta);
       if (v !== null) patch[key] = v;
+    }
+    // One bounded weight step for the weighted model (4.0.0). The review's
+    // backtest gate accepts it only if net P&L improves.
+    const wk = WEIGHT_NUDGE[bottleneck];
+    if (wk) {
+      const v = step(`params.${bottleneck}`, wk, 0.5);
+      if (v !== null) patch[wk] = v;
     }
     if (Object.keys(patch).length)
       merge(

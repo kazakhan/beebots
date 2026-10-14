@@ -536,12 +536,12 @@ test("the model.env key is never forwarded to a different provider", () => {
 
 // --- decision-engine selection (2.9.0) -----------------------------------
 
-test("an install with no engine setting defaults to Laya", () => {
+test("an install with no engine setting defaults to the weighted model", () => {
   const f = fixture();
   try {
-    assert.equal(f.settings.engineValue(), "laya");
-    assert.equal(f.settings.redacted().engine, "laya");
-    assert.equal(f.settings.redacted().engineLabel, "Laya");
+    assert.equal(f.settings.engineValue(), "weighted");
+    assert.equal(f.settings.redacted().engine, "weighted");
+    assert.equal(f.settings.redacted().engineLabel, "Weighted (code)");
     // The hourly review still uses the LLM by default.
     assert.equal(f.settings.reviewLlm(), true);
     assert.equal(f.settings.redacted().reviewLlm, true);
@@ -565,7 +565,7 @@ test("the default engine option overrides the built-in default", () => {
       fallback: { baseUrl: "https://api.deepseek.com", name: "deepseek-flash" },
       defaultEngine: "nope",
     });
-    assert.equal(bad.engineValue(), "laya");
+    assert.equal(bad.engineValue(), "weighted");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

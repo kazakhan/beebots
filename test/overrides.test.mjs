@@ -162,3 +162,10 @@ test("the signal timeframe is a fixed, non-tunable parameter", () => {
     /fixed parameter/,
   );
 });
+
+test("weighted-model weights are tunable within bounds", () => {
+  assert.ok(PARAM_KEYS.includes("wM7"));
+  assert.ok(PARAM_KEYS.includes("scoreMin"));
+  assert.equal(validateParams("params.trend", { wM7: 3, scoreMin: 2 }), null);
+  assert.match(validateParams("params.trend", { wM7: 99 }), /between/);
+});

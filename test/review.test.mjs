@@ -1202,3 +1202,65 @@ test("an advisory review (config autoApply off) does nothing at all", async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a weight change is gated by the backtest", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-wgate-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    const model = {
+      review: async () => ({
+        data: {
+          proposals: [
+            { target: "params.trend", proposed: JSON.stringify({ wM7: 9 }) },
+          ],
+        },
+      }),
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: {},
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    let calls = 0;
+    // Worse proposed weights -> refused; better -> accepted.
+    let better = false;
+    const backtest = (bot, rules) => {
+      calls++;
+      const net = Number(rules.wM7) === 9 ? (better ? 20 : 0) : 5;
+      return { net, trades: 3 };
+    };
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+      backtest,
+    });
+    assert.ok(calls >= 2, "backtest current and proposed");
+    assert.ok(
+      rec.proposals[0].gate.reasons.some((r) => /Backtest/.test(r)),
+      "worse weights refused",
+    );
+    better = true;
+    const rec2 = await reviewer.run({
+      since: 0,
+      until: 7200000,
+      coverage: null,
+      autoApply: false,
+      backtest,
+    });
+    assert.ok(
+      !rec2.proposals[0].gate.reasons.some((r) => /Backtest/.test(r)),
+      "better weights accepted by the backtest",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
