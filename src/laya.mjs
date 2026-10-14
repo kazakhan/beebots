@@ -110,6 +110,13 @@ export class Laya {
     this.timeoutMs = timeoutMs;
     this.dataDir = dataDir;
     this.tail = Promise.resolve();
+    this.sockets = new Set();
+  }
+  // Destroy every in-flight request so a pending await returns at once. Used by
+  // the shutdown path so a blocked inference cannot stall SIGTERM (4.0.1).
+  abort() {
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
   }
   questionsOverride() {
     return this.dataDir
@@ -126,12 +133,15 @@ export class Laya {
   request(body, timeoutMs = this.timeoutMs) {
     return new Promise((resolve, reject) => {
       const socket = net.createConnection(this.path);
+      this.sockets ??= new Set();
+      this.sockets.add(socket);
       let data = Buffer.alloc(0),
         done = false;
       const finish = (e, r) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
+        this.sockets.delete(socket);
         socket.destroy();
         e ? reject(e) : resolve(r);
       };
@@ -142,6 +152,9 @@ export class Laya {
       socket.on("connect", () => socket.write(JSON.stringify(body) + "\n"));
       socket.on("error", () => finish(Error("Laya socket unavailable")));
       socket.on("end", () => finish(Error("Incomplete Laya response")));
+      // A destroyed socket (abort/shutdown) fires "close", not "end": settle so
+      // the awaited request returns immediately instead of hanging.
+      socket.on("close", () => finish(Error("Laya connection closed")));
       socket.on("data", (chunk) => {
         data = Buffer.concat([data, chunk]);
         if (data.length > 1024 * 1024)

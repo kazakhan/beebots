@@ -19,7 +19,7 @@ const config = loadConfig(
 mkdirSync(config.dataDir, { recursive: true, mode: 0o750 });
 const lock = join(config.dataDir, "runtime.lock");
 const releaseLock = acquireLock(lock);
-let store, server, engine, pruneTimer;
+let store, server, engine, pruneTimer, laya;
 try {
   store = new Store(join(config.dataDir, "beebots.sqlite"), config);
   // Market telemetry is bulky and unbounded: on the live ledger it reached
@@ -57,7 +57,7 @@ try {
     defaultEngine:
       config.engine ?? (config.layaEnabled === false ? "llm" : "laya"),
   });
-  const laya = new Laya(
+  laya = new Laya(
     config.layaSocket,
     // Give the batched path headroom: a chunk waits behind the single-GPU lock,
     // which is shared with other consumers, and can legitimately take a while.
@@ -142,16 +142,45 @@ let stopping = false;
 async function shutdown() {
   if (stopping) return;
   stopping = true;
-  engine.stop();
-  clearInterval(pruneTimer);
-  server.closeStreams();
-  server.close();
-  while (engine.busy || engine.protectBusy)
-    await new Promise((r) => setTimeout(r, 100));
-  await engine.executing;
-  await engine.market.stop?.();
-  store.close();
-  releaseLock();
+  // Hard failsafe: force-exit even if a graceful close hangs. SQLite is in WAL
+  // mode (crash-safe) and startup reconciles any interrupted order, so a forced
+  // exit is safe.
+  const failsafe = setTimeout(() => process.exit(0), 8000);
+  try {
+    engine.stop();
+    clearInterval(pruneTimer);
+    // Cancel in-flight model/network work so the bounded waits below return.
+    laya?.abort?.();
+    server.closeStreams();
+    server.closeAllConnections?.();
+    server.close();
+    // Wait for in-flight cycles/protection, then the serial queue and the market
+    // wind-down - each bounded, so SIGTERM cannot stall.
+    const deadline = Date.now() + 5000;
+    while ((engine.busy || engine.protectBusy) && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 50));
+    await Promise.race([
+      engine.executing,
+      new Promise((r) => setTimeout(r, 1000)),
+    ]);
+    await Promise.race([
+      engine.market.stop?.() ?? Promise.resolve(),
+      new Promise((r) => setTimeout(r, 2500)),
+    ]);
+  } catch {
+    /* best effort */
+  }
+  try {
+    store?.close();
+  } catch {
+    /* best effort */
+  }
+  try {
+    releaseLock();
+  } catch {
+    /* best effort */
+  }
+  clearTimeout(failsafe);
   process.exit(0);
 }
 process.on("SIGINT", shutdown);

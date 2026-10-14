@@ -344,3 +344,17 @@ test("batch is serialised behind other Laya calls", async () => {
     await f.close();
   }
 });
+
+test("abort settles an in-flight request immediately", async () => {
+  const f = await fixture(() => {}); // accepts but never responds
+  try {
+    const l = new Laya(f.path, 60000);
+    const pending = l.request({ ping: true });
+    pending.catch(() => {});
+    await new Promise((r) => setTimeout(r, 30));
+    l.abort();
+    await assert.rejects(pending, /closed|unavailable|abort/i);
+  } finally {
+    await f.close();
+  }
+});

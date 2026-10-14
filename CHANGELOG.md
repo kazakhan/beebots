@@ -14,6 +14,37 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [4.0.1] - 2026-10-14 - Fast, bounded shutdown
+
+SIGTERM could stall for tens of seconds (and end in SIGKILL) because shutdown
+awaited in-flight work with no bound: a cycle blocked on a Laya call (up to 90 s),
+the serial queue, and every in-flight market read. Shutdown is now bounded and
+guaranteed.
+
+### Changed
+
+- **`main.mjs` shutdown is bounded and self-terminating.** It aborts in-flight
+  Laya requests (`laya.abort()`), ends the dashboard streams, calls
+  `server.closeAllConnections()`, waits for cycles/protection/queue/market each
+  with a short deadline (5 s + 1 s + 2.5 s), then closes the store and lock and
+  exits. A hard **8 s failsafe** force-exits regardless. Safe because SQLite is in
+  WAL mode and startup reconciles interrupted orders.
+- **`laya.abort()`** destroys every tracked in-flight request socket, and the
+  request now settles on `close`, so a blocked inference returns immediately.
+- **`collector.stop()` is bounded** - the discovery task and the in-flight-reader
+  wait are each capped (~2 s) and reader/cache closes are best-effort.
+
+### Notes
+
+- The systemd unit's `TimeoutStopSec` was left untouched (out of scope); the
+  bounded app-side shutdown is what makes it fast.
+
+### Verification
+
+- 330 Node tests pass, up from 329: `laya.abort()` settles an in-flight request.
+
+---
+
 ## [4.0.0] - 2026-10-14 - Weighted trading model; Laya for evaluation
 
 Trading no longer calls a model per cycle. A code-side **weighted score** decides

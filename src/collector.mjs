@@ -504,9 +504,26 @@ export class UniverseMarket extends Market {
   async stop() {
     this.closed = true;
     clearInterval(this.timer);
-    await this.discoveryTask;
-    while (this.active.size) await new Promise((r) => setTimeout(r, 50));
-    for (const r of this.readers) r.close();
-    this.cache.close();
+    // Bounded: never let a hung discovery or an in-flight network read stall the
+    // process. Readers are closed (aborting their fetch) after a short grace.
+    await Promise.race([
+      this.discoveryTask?.catch?.(() => {}) ?? Promise.resolve(),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]);
+    const deadline = Date.now() + 2000;
+    while (this.active.size && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 50));
+    for (const r of this.readers) {
+      try {
+        r.close();
+      } catch {
+        /* best effort */
+      }
+    }
+    try {
+      this.cache.close();
+    } catch {
+      /* best effort */
+    }
   }
 }
