@@ -148,8 +148,12 @@ export function scoreCandidate(f, weights) {
 // entry (do not buy a position that would be closed immediately) and the exit
 // (RuleExit), so entry and exit can never disagree (4.0.2).
 export function exitWouldFire(rule, f, rules = {}) {
-  if (rule === "orakelia")
+  if (rule === "orakelia") {
+    // The momentum-fade exit is on by default; `fadeExit:false` removes it for a
+    // controlled experiment (entry and exit stay consistent either way).
+    if (rules.fadeExit === false) return false;
     return Number(f.momentum7dPct) <= 0 || Number(f.momentum24hPct) <= 0;
+  }
   if (rule === "connors_thorp") {
     const neutral = Number(rules.rsiNeutral) || 50;
     return Number.isFinite(f.rsi) && Number(f.rsi) >= neutral;

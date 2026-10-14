@@ -14,6 +14,34 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [4.0.3] - 2026-10-15 - Persist audit fields; make the loop propose
+
+### Fixed
+
+- **Orders now persist `rulesHash`, `exitRules` and `sizing`.** `store.reserve()`
+  destructured a fixed key set and silently dropped them, so since 3.9.0 the
+  report's "by config version" was always `unknown`, exit rules were **not**
+  actually frozen on positions, and the sizing breakdown was never logged. The
+  fields are now carried onto the order (and copied to the position on fill).
+
+### Changed
+
+- **The no-LLM self-tune now proposes for any losing arm.** Previously it only
+  nudged on a weak bottleneck or a missed opportunity, so it kept returning "no
+  change needed" and the weights never moved. Each arm flagged STRATEGY DUE now
+  gets exactly one bounded weight step; the review's backtest gate still accepts
+  it only if net P&L improves. (When the LLM review is funded it can propose
+  weight deltas too, under the same gate.)
+- **`fadeExit` toggle** (default on): Keeper's momentum-fade exit can be removed
+  for a controlled experiment without changing entry/exit consistency.
+
+### Verification
+
+- 336 Node tests pass, up from 333: the order audit fields reaching the position,
+  the fade-exit toggle, and the losing-arm weight step.
+
+---
+
 ## [4.0.2] - 2026-10-14 - Align entry with exit; stop the churn
 
 Trend was buying and selling the same pair within 10-16 seconds (live orders at

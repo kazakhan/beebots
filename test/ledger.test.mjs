@@ -169,3 +169,34 @@ test("pause blocks buys but allows owned exits", () => {
   );
   s.close();
 });
+
+test("an order persists the audit fields and freezes them on the position", () => {
+  const s = new Store(":memory:", config());
+  arm(s);
+  const o = s.reserve({
+    bot: "breakout",
+    side: "BUY",
+    product: "BTC-USDC",
+    size: "50",
+    reserve: "51",
+    reason: "test",
+    stopPct: 3,
+    trailPct: 2,
+    trailActivationPct: 4,
+    maxHoldHours: 24,
+    rulesHash: "abc123",
+    exitRules: { rule: "breakout_liquid", cooldownHours: 1 },
+    sizing: { requestedRiskPct: 0.5, notionalPct: 16, plannedLossPct: 0.5 },
+  });
+  const order = s.read().orders[o.id];
+  assert.equal(order.rulesHash, "abc123");
+  assert.equal(order.exitRules.rule, "breakout_liquid");
+  assert.ok(order.sizing);
+  s.acknowledge(o.id, "exchange-" + o.id);
+  s.applyOrder(o.id, exchangeOrder(o));
+  const pos = s.read().bots.breakout.positions[0];
+  assert.equal(pos.rulesHash, "abc123");
+  assert.equal(pos.exitRules.rule, "breakout_liquid");
+  assert.ok(pos.sizing);
+  s.close();
+});

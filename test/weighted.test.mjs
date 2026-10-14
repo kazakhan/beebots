@@ -165,3 +165,11 @@ test("chooseWeightedMove skips paused products", () => {
   });
   assert.equal(read.action, "SKIP");
 });
+
+test("exitWouldFire can drop the fade exit for an experiment", () => {
+  assert.equal(exitWouldFire("orakelia", { momentum7dPct: -1 }, {}), true);
+  assert.equal(
+    exitWouldFire("orakelia", { momentum7dPct: -1 }, { fadeExit: false }),
+    false,
+  );
+});

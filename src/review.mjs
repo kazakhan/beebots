@@ -816,6 +816,7 @@ export class TradeReview {
       const tuned = selfTune({
         answers: laya.answers,
         current: (t) => this.currentValue(t),
+        due: this.strategyDue(this.store.read().orders),
       });
       summary = tuned.length
         ? `Laya self-tune: ${tuned.length} bounded change(s)`

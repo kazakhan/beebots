@@ -312,6 +312,10 @@ export class Store extends EventEmitter {
     trailActivationPct,
     maxHoldHours,
     policy = null,
+    // Audit + freeze (3.9/3.10, persisted since 4.0.3).
+    rulesHash = null,
+    exitRules = null,
+    sizing = null,
   }) {
     const id = randomUUID();
     this.change(
@@ -358,6 +362,9 @@ export class Store extends EventEmitter {
           trailActivationPct,
           maxHoldHours,
           policy,
+          ...(rulesHash ? { rulesHash } : {}),
+          ...(exitRules ? { exitRules } : {}),
+          ...(sizing ? { sizing } : {}),
           status: "SUBMITTING",
           created: Date.now(),
           exchangeId: null,

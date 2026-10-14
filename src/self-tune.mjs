@@ -25,7 +25,11 @@ const LOOSEN = {
   momentum: { rsiOversold: 5, maxExtensionAtr: 0.25 },
 };
 
-export function selfTune({ answers = {}, current = () => ({}) } = {}) {
+export function selfTune({
+  answers = {},
+  current = () => ({}),
+  due = null,
+} = {}) {
   const byTarget = new Map();
   const merge = (target, patch, why) => {
     const entry = byTarget.get(target) ?? {
@@ -81,6 +85,22 @@ export function selfTune({ answers = {}, current = () => ({}) } = {}) {
     );
     if (v !== null)
       merge(`params.${bottleneck}`, { trailAtr: v }, `Laya: exits ${exit}`);
+  }
+
+  // Any arm that is losing money gets exactly one bounded weight step (4.0.3),
+  // so the loop keeps proposing. The review's backtest gate accepts it only when
+  // it improves net P&L, so an unhelpful nudge is refused.
+  for (const arm of BOTS) {
+    if (!due?.[arm]?.due) continue;
+    const wk = WEIGHT_NUDGE[arm];
+    if (!wk) continue;
+    const v = step(`params.${arm}`, wk, 0.5);
+    if (v !== null)
+      merge(
+        `params.${arm}`,
+        { [wk]: v },
+        `Laya: ${arm} losing (one weight step)`,
+      );
   }
 
   // Analysis variant from Laya's self-review of its own questions.

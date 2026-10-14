@@ -113,6 +113,9 @@ export const TEMPLATE_DEFAULTS = {
     // half of Orakelia's exit rule). 3.11.0 experiment: OFF by default - a
     // falling volume does not by itself mean the uptrend failed.
     volumeDropExit: false,
+    // 4.0.3: the momentum-fade exit is on by default; `fadeExit:false` removes it
+    // for a controlled experiment (entry and exit stay consistent either way).
+    fadeExit: true,
     volumeFloor: 1,
     // After a fade exit, block re-entry on that coin for this many hours.
     pauseHours: 4,

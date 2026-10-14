@@ -77,3 +77,15 @@ test("a clean review proposes nothing", () => {
     [],
   );
 });
+
+test("a losing arm gets one bounded weight step", () => {
+  const current = (t) => (t === "params.trend" ? { wM7: 2, scoreMin: 1 } : {});
+  const changes = selfTune({
+    answers: { primary_bottleneck: { choice: "none" } },
+    current,
+    due: { trend: { due: true }, momentum: { due: false } },
+  });
+  const p = changes.find((c) => c.target === "params.trend");
+  assert.ok(p, "losing trend proposes a change");
+  assert.equal(JSON.parse(p.proposed).wM7, 2.5, "one bounded weight step");
+});
