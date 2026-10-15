@@ -27,7 +27,6 @@ import {
   losingStreaks,
 } from "../src/review.mjs";
 import { validateOverride, overridePath } from "../src/overrides.mjs";
-import { getTemplates, setTemplates } from "../src/strategy-v2.mjs";
 import { defaultAnalysisQuestions } from "../src/laya.mjs";
 
 const SAFE_RUBRIC =
@@ -542,7 +541,8 @@ test("with an LLM the review sees Laya's verdict, not the raw hour", async () =>
       seen.includes("APPLIED CHANGES"),
       "the change ledger is supplied",
     );
-    assert.ok(seen.includes("CURRENT TARGETS"));
+    assert.ok(seen.includes("WEIGHTED MODEL"));
+    assert.ok(!seen.includes("STRATEGY POOL"));
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -895,8 +895,8 @@ test("mergeProposal merges a partial patch onto the current target", () => {
   }
 });
 
-test("the review prompt carries the strategy pool and due flags", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "beebots-pool-"));
+test("the review prompt is weights-only with no rotation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-weights-"));
   const store = new Store(":memory:", config());
   try {
     const laya = {
@@ -923,9 +923,11 @@ test("the review prompt carries the strategy pool and due flags", async () => {
       coverage: null,
       autoApply: false,
     });
-    assert.ok(seen.includes("STRATEGY POOL"));
-    assert.ok(seen.includes("STRATEGY DUE"));
-    assert.ok(seen.includes("RE-ENTRY CONTEXT"));
+    assert.ok(seen.includes("WEIGHTED MODEL"));
+    assert.ok(seen.includes("LOSING ARMS"));
+    assert.ok(!seen.includes("STRATEGY POOL"));
+    assert.ok(!seen.includes("STRATEGY DUE"));
+    assert.ok(!/ROTATE|strategy template|strategyPool/i.test(seen));
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -1089,53 +1091,6 @@ test("an hourly pass stores Laya's read and applies nothing", async () => {
   }
 });
 
-test("the review can delete and create strategy templates", () => {
-  const dir = mkdtempSync(join(tmpdir(), "beebots-pool-"));
-  const store = new Store(":memory:", config());
-  const original = { ...getTemplates() };
-  try {
-    const reviewer = new TradeReview({
-      store,
-      laya: {},
-      model: {},
-      config: {},
-      dataDir: dir,
-    });
-    assert.match(
-      reviewer.poolError({
-        remove: [],
-        add: [{ id: "x", rule: "nope", universe: "all", timeframe: "5m" }],
-      }),
-      /Unknown rule/,
-    );
-    assert.match(
-      reviewer.poolError({ remove: Object.keys(getTemplates()), add: [] }),
-      /every template/,
-    );
-    reviewer.applyPool({
-      remove: ["trend_pullback"],
-      add: [
-        {
-          id: "hex5",
-          label: "Hexchaser 5m top20",
-          rule: "hexchaser",
-          universe: "top20",
-          timeframe: "5m",
-        },
-      ],
-    });
-    const pool = getTemplates();
-    assert.ok(!pool.trend_pullback, "the deleted template is gone");
-    assert.equal(pool.hex5.rule, "hexchaser");
-    assert.equal(pool.hex5.universe, "top20");
-    assert.ok(store.read().strategyPool.hex5, "the pool is persisted in state");
-  } finally {
-    setTemplates(original);
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("a frozen review (autoApply off) performs no automatic writes", async () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-freeze-"));
   const store = new Store(":memory:", config());
@@ -1258,6 +1213,58 @@ test("a weight change is gated by the backtest", async () => {
     assert.ok(
       !rec2.proposals[0].gate.reasons.some((r) => /Backtest/.test(r)),
       "better weights accepted by the backtest",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the review refuses any non-weight proposal", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-wonly-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    const model = {
+      review: async () => ({
+        data: {
+          proposals: [
+            {
+              target: "params.trend",
+              proposed: JSON.stringify({ riskPct: 0.8 }),
+            },
+            { target: "rubric.trend", proposed: "# Doc" },
+          ],
+        },
+      }),
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: { review: { maxProposals: 2 } },
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+      backtest: () => ({ net: 5, trades: 1 }),
+    });
+    const byTarget = Object.fromEntries(
+      rec.proposals.map((p) => [p.target, p]),
+    );
+    assert.ok(
+      byTarget["params.trend"].gate.reasons.some((r) => /Weights-only/.test(r)),
+      "a non-weight param key is refused",
+    );
+    assert.ok(
+      byTarget["rubric.trend"].gate.reasons.some((r) => /Weights-only/.test(r)),
+      "a non-params target is refused",
     );
   } finally {
     store.close();

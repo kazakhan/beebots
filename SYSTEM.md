@@ -97,16 +97,24 @@ trade loop.
   **backtest** (`src/backtest.mjs`, deterministic replay over the candles held,
   net P&L after fees) beats the current weights by ≥0.1.
 
-## Strategy pool and rotationEach bot runs one **pinned strategy template** from a **dynamic pool**
-(`getTemplates()` in `strategy-v2.mjs`). A template is a **coded rule + universe +
-timeframe**; the pool holds `orakelia`, `connors_thorp`, `breakout_liquid`,
-`hexchaser`, `market_mover` and `trend_pullback`. The three bots are **pinned**
-(3.8.0) to `orakelia` (Keeper), `connors_thorp` (Spark) and `breakout_liquid`
-(Scout); `strategyPinned` refuses any proposal that changes a pinned bot's
-strategy, and `effectiveRules` enforces the pin. The review may still tune a
-pinned bot's numeric params. The liquid templates scan the **top-100** market-cap
-universe. `evaluate()` dispatches on the template's rule; the collector applies
-its universe (`all`/`top100`/`top20`) and its ranking.
+## Templates (feature providers) and weights (the only tunable)
+
+Each bot runs **one fixed template** from the pool (`getTemplates()` in
+`strategy-v2.mjs`) purely as a **feature provider**: `orakelia` (Keeper),
+`connors_thorp` (Spark), `breakout_liquid` (Scout). It is **pinned** and
+`effectiveRules` enforces it; `strategy` is a **locked** parameter and is never
+offered or changed. The liquid templates scan the **top-100** market-cap universe.
+`evaluate()` dispatches on the template's rule; the collector applies its universe
+(`all`/`top100`/`top20`) and its ranking.
+
+**The review tunes weights ONLY (4.0.4).** Trading is the weighted score; the
+Trade Review's sole job is to fine-tune each bot's weights (`wM7 … wRank`) and its
+entry threshold `scoreMin` to raise realised P&L / cut losses. It may not touch
+templates, the pool, rubrics, Laya's questions or the runtime; any non-weight
+proposal is refused ("Weights-only review"). A weight change is applied only if a
+deterministic **backtest** over the candles held beats the current weights by a
+margin. `self-tune` (no-LLM) emits one bounded weight step per bottleneck/losing
+arm.
 
 **Shared exits plus code rules (3.8.0).** Every bot - and Dice - exits on the
 **percentage protective stop** (`stopPct`), the **trailing stop**
@@ -209,16 +217,11 @@ set of classified heads (the _review questions_). This always runs.
 
 **Stage 2 — the LLM reviews the window.** The model is handed **only Laya's
 answers** (never the raw hour) plus the per-arm scoreboard, the applied-change
-ledger, the current value of every editable target, and the allowed ranges. It
-may change:
-
-- a bot's **rubric** (the written strategy),
-- Laya's **review questions** (what Laya is asked to judge),
-- the bots' **numeric strategy** (entry gates, risk, cadence, Scout's universe
-  categories) and the runtime knobs, and
-- the **strategy pool** (`strategyPool`): delete a losing template, or add a new
-  template by combining a coded rule with a universe and timeframe. The
-  **bot's** timeframe is fixed and cannot be changed.
+ledger, the current weights, and the allowed ranges. It may change **only the
+weights** (`params.<bot>.wM7 … wRank`) and the entry threshold `scoreMin`. Every
+other target/key (templates, pool, rubrics, Laya's questions, runtime) is refused
+("Weights-only review"), and a weight change is applied only if the backtest beats
+the current weights by a margin.
 
 When the review toggle is off, or when the LLM stage cannot run, Stage 2 is
 Laya's self-tune instead. Either way the loop keeps improving.

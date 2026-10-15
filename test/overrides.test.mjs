@@ -132,27 +132,18 @@ test("maxCandidates is fixed: out of the tunables and refused as a proposal", ()
   );
 });
 
-test("strategy is a tunable enum of the pool", () => {
-  assert.ok(PARAM_KEYS.includes("strategy"));
-  assert.equal(validateParams("params.trend", { strategy: "orakelia" }), null);
-  assert.match(validateParams("params.trend", { strategy: "nope" }), /one of/);
-});
-
-test("a pinned bot's strategy cannot be proposed", () => {
+test("strategy is a fixed, non-tunable parameter", () => {
+  assert.ok(!PARAM_KEYS.includes("strategy"), "not offered as a tunable");
   assert.match(
     validateOverride("params.breakout", '{"strategy":"orakelia"}'),
-    /fixed for this bot/,
-  );
-  assert.match(
-    validateOverride("params.momentum", '{"strategy":"hexchaser"}'),
-    /fixed for this bot/,
+    /fixed/,
   );
   assert.match(
     validateOverride("params.trend", '{"strategy":"market_mover"}'),
-    /fixed for this bot/,
+    /fixed/,
   );
-  // Numeric params on a pinned bot are still allowed.
-  assert.equal(validateOverride("params.trend", '{"riskPct":1.1}'), null);
+  // Weights on a bot are still allowed.
+  assert.equal(validateOverride("params.trend", '{"wM7":2.5}'), null);
 });
 
 test("the signal timeframe is a fixed, non-tunable parameter", () => {

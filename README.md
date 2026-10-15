@@ -243,12 +243,14 @@ The **Trade Review** runs on two cadences. **Hourly at `:00`** it collects data
 only: Laya reads the hour and the record is stored, with no LLM and no changes.
 **Every 4 hours at local 00/04/08/12/16/20** the decision model reviews the
 hourly data collected since the last apply and is the only pass that applies
-changes: at most three proposals that adjust a bot's numeric strategy, a bot's
-rubric, **Laya's own question sets**, or the **strategy pool** (delete a losing
-template / add a new combination of a coded rule + universe + timeframe; a bot's
-own signal timeframe is fixed by its template and cannot change). The review
-judges Laya as well as the bots, using a table of Laya's label distribution and
-the win rate / P&L its pre-entry `fit` tracked.
+changes. The trading decision is a **weighted model**, so the review tunes
+**weights only**: each bot's feature weights (`params.<bot>.wM7 … wRank`) and its
+entry threshold `scoreMin`, to raise realised P&L / cut losses. Any other target
+or key (templates, the pool, rubrics, Laya's questions, the runtime) is refused
+("Weights-only review"), and a weight change is applied only if a deterministic
+**backtest** over the candles held beats the current weights by a margin. The
+review judges Laya as well as the bots, using a table of Laya's label distribution
+and the win rate / P&L its pre-entry `fit` tracked.
 
 A proposal is applied only when it stays in scope (prose only — never risk
 numbers, capital, mode or code), is a **complete validated document** (a rubric

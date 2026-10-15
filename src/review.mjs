@@ -47,15 +47,9 @@ import {
 import { join } from "node:path";
 import { dec } from "./decimal.mjs";
 import { usageCounts, costOf } from "./providers.mjs";
-import {
-  defaults as STRATEGY_DEFAULTS,
-  STRATEGY_RULES,
-  getTemplates,
-  setTemplates,
-} from "./strategy-v2.mjs";
+import { defaults as STRATEGY_DEFAULTS } from "./strategy-v2.mjs";
 import { selfTune } from "./self-tune.mjs";
-import { WEIGHT_KEYS } from "./weighted.mjs";
-import { VARIANT_NAMES } from "./analysis-variants.mjs";
+import { WEIGHT_KEYS, SEED_WEIGHTS, SEED_SCORE_MIN } from "./weighted.mjs";
 import {
   ALLOWED_TARGETS,
   targetAllowed,
@@ -68,7 +62,6 @@ import {
   PARAM_KEYS,
   PARAM_SCHEMA,
   RUNTIME_KEYS,
-  RUNTIME_SCHEMA,
   PINNED_STRATEGY_BOTS,
 } from "./overrides.mjs";
 
@@ -485,46 +478,35 @@ export function buildHourState({ events, orders, coverage, since, until }) {
 }
 
 const REVIEW_SYSTEM =
-  "You improve an automated spot-trading system with three strategy bots and a " +
-  "random control arm named Dice. Your goal is to INCREASE each bot's EQUITY. " +
-  "Dice is a reference control, not the target: measure each bot against its " +
-  "own realised P&L, not against Dice. Trading LESS is NOT a strategy: " +
-  "tightening an entry gate so there are fewer trades does not improve " +
-  "anything, and 'fewer candidates' is NOT 'better quality'. Every proposal " +
-  "must keep the arm participating and raise its P&L. " +
-  "You may change: a bot's written rubric, Laya's question sets, the numeric " +
-  "strategy parameters, the runtime knobs, a bot's STRATEGY TEMPLATE " +
-  "(`params.<bot>.strategy`, chosen from STRATEGY POOL), and the STRATEGY POOL " +
-  "itself (target `strategyPool`). The pool edit is " +
-  '{"target":"strategyPool","proposed":{"remove":["id"],"add":[{"id","label","rule","universe","timeframe","count"}]}} ' +
-  "- delete a template that is losing, or add a NEW one by combining a coded " +
-  "rule with a universe and timeframe (a template is always executable). " +
-  "`maxCandidates` is " +
-  "OUT OF SCOPE - never propose it. Two jobs: (1) judge each bot on its own " +
-  "realised P&L and win/loss in Laya's review of the hour; (2) judge Laya " +
-  "itself. You are given Laya's review, the per-arm results, the STRATEGY DUE " +
-  "flags, the allowed ranges, and the current value of each target. " +
-  "ROTATE A LOSER: if a bot is flagged STRATEGY DUE (it has lost money over " +
-  "its last 10 closed trades), replace its strategy with a DIFFERENT one " +
-  "from the pool instead of nudging the loser. Propose at most ONE change per " +
-  "bot, up to two bots. For numeric targets (`params.*`, `runtime`, " +
-  "`laya.analysisPolicy`) return a PATCH: only the keys you change, e.g. " +
-  '{"riskPct":0.8}; the code merges it onto the current value. For ' +
-  "`laya.reviewQuestions` return only the heads you change. A rubric, if you " +
-  "change one, must still be the full document with its heading. Keep it " +
-  "compact: a short summary (at most 600 characters), at most three " +
-  "observations, a brief rationale. Numeric values must stay within the " +
-  "allowed ranges; anything outside is refused. A bot's signal timeframe is " +
-  "FIXED by its template and is not changeable. Rubrics must retain " +
-  "their safety clauses: no shorts, Laya is uncalibrated evidence not a " +
-  "decision or probability, code controls size and execution, do not alter " +
-  "stops, do not force trades. Capital, mode, leverage and disabling stops " +
-  "are never changeable. To undo one of your own applied changes, propose " +
+  "You tune the WEIGHTS of an automated spot-trading system with three strategy " +
+  "bots and a random control arm named Dice. Trade decisions are made by a " +
+  "WEIGHTED MODEL: every candidate is scored by a weighted sum of its features " +
+  "(momentum7d, momentum24h, relative volume, RSI, trend, breakout, liquidity, " +
+  "rank) plus the entry threshold `scoreMin`, and the highest-scoring executable " +
+  "candidate above `scoreMin` is bought. Your ONLY job is to fine-tune each bot's " +
+  "WEIGHTS and `scoreMin` to INCREASE that bot's realised P&L - raise profit and " +
+  "cut losses. Dice is a reference control, not the target: measure each bot " +
+  "against its OWN realised P&L. Trading LESS is NOT a strategy: tightening so " +
+  "there are fewer trades does not help, and 'fewer candidates' is NOT 'better " +
+  "quality'; every proposal must keep the arm participating and raise its P&L. " +
+  "The ONLY allowed target is `params.<bot>` and the ONLY allowed keys are the " +
+  "weights (wM7, wM24, wVol, wRsiLow, wReversion, wPriceUp, wEma20, wEma50, " +
+  "wBreakout, wLiquidity, wRank) and `scoreMin`. Any other target or key is " +
+  "refused. A positive weight favours that feature; a negative weight penalises " +
+  'it. Return a PATCH of only the keys you change, e.g. {"wM7":2.5}; the code ' +
+  "merges it onto the current weights, and a change is applied only if a " +
+  "deterministic backtest over the candles held shows net P&L improves by a " +
+  "margin. Propose at most ONE change per bot. Keep it compact: a short summary " +
+  "(at most 600 characters), at most three observations, a brief rationale. " +
+  "Numeric values must stay within the allowed ranges; anything outside is " +
+  "refused. Capital, mode, leverage, stops, position size, the strategy " +
+  "templates, rubrics, Laya's questions and the runtime knobs are NEVER " +
+  "changeable. To undo one of your own applied changes, propose " +
   "{target, revert:true, rationale} when the ledger shows it is losing money. " +
   "If nothing is worth changing, return an empty proposals list. " +
   "Return only JSON: " +
   '{"summary":"...","observations":[{"bot":"...","issue":"...","evidence":"..."}],' +
-  '"proposals":[{"target":"...","proposed":"...","rationale":"...","risk":"..."}]}.';
+  '"proposals":[{"target":"params.<bot>","proposed":"{\\"wM7\\":2.5}","rationale":"...","risk":"..."}]}.';
 
 export class TradeReview {
   constructor({ store, laya, model, config, dataDir, reviewLlm = null }) {
@@ -567,6 +549,11 @@ export class TradeReview {
   effectiveParams(id) {
     const base = {
       ...(STRATEGY_DEFAULTS[id] ?? {}),
+      // The weighted model's seed weights, so the review can see and tune them.
+      ...(SEED_WEIGHTS[id] ?? {}),
+      ...(Number.isFinite(SEED_SCORE_MIN[id])
+        ? { scoreMin: SEED_SCORE_MIN[id] }
+        : {}),
       ...(this.config.bots?.[id] ?? {}),
     };
     const over = readJsonOverride(this.dataDir, `params.${id}`, null);
@@ -698,6 +685,19 @@ export class TradeReview {
     out["laya.analysisPolicy"] = this.currentFor("laya.analysisPolicy");
     return out;
   }
+  // The weighted-model view: each strategy bot's tunable weights + threshold.
+  // This is the ONLY thing the review may change (4.0.4).
+  weightsView() {
+    const out = {};
+    for (const id of STRATEGY_ARMS) {
+      const eff = this.effectiveParams(id);
+      const w = {};
+      for (const k of [...WEIGHT_KEYS, "scoreMin"])
+        if (eff[k] !== undefined) w[k] = eff[k];
+      out[id] = w;
+    }
+    return out;
+  }
   // The allowed numeric ranges, so the model proposes in-bounds values.
   schemaText() {
     const fmt = (schema, keys) =>
@@ -713,12 +713,9 @@ export class TradeReview {
         })
         .join("; ");
     return (
-      "ALLOWED NUMERIC RANGES\nparams.<bot>: " +
-      fmt(PARAM_SCHEMA, PARAM_KEYS) +
-      "\nruntime: " +
-      fmt(RUNTIME_SCHEMA, RUNTIME_KEYS) +
-      "\nlaya.analysisPolicy.variant: one of " +
-      VARIANT_NAMES.join(", ")
+      "ALLOWED NUMERIC RANGES (weights only)\nparams.<bot>: " +
+      fmt(PARAM_SCHEMA, [...WEIGHT_KEYS, "scoreMin"]) +
+      "\nNo other target or key is accepted."
     );
   }
   // One apply pass: gather the window, let Laya classify it, let the model
@@ -845,27 +842,21 @@ export class TradeReview {
             : "") +
           "\n\nAPPLIED CHANGES (your prior edits and their effect)\n" +
           JSON.stringify(this.appliedLedger(s.orders)) +
-          "\n\nSTRATEGY POOL (values for params.<bot>.strategy; delete a losing " +
-          "template or add one by combining a coded rule + universe + timeframe)\n" +
-          Object.keys(getTemplates()).join(", ") +
-          "\nCODED RULES: " +
-          Object.keys(STRATEGY_RULES).join(", ") +
-          " | UNIVERSES: all, top100, top20 | TIMEFRAMES: 5m, 15m, 1h" +
-          "\n\nSTRATEGY DUE (10 closed trades and losing money: replace the strategy)\n" +
+          "\n\nWEIGHTED MODEL (the ONLY tunable: per bot, feature weights + " +
+          "scoreMin). Trade decisions are a weighted score; raise P&L by tuning " +
+          "these weights - do NOT trade less.\n" +
+          JSON.stringify(this.weightsView()) +
+          "\n\nLOSING ARMS (10+ closed trades and losing money: tune that bot's " +
+          "weights)\n" +
           JSON.stringify(this.strategyDue(s.orders)) +
           (focusArm
             ? "\n\nFOCUS: review ONLY the " +
               focusArm +
               " bot. It has lost its last " +
               focusStreak +
-              " closed trades in a row. Propose a change for " +
-              focusArm +
-              " only - adjust its numeric params, or replace its strategy template. Do NOT propose changes for any other bot."
+              " closed trades in a row. Adjust its weights only. Do NOT propose " +
+              "changes for any other bot."
             : "") +
-          "\n\nRE-ENTRY CONTEXT (closes inside the reentryLookbackBars window)\n" +
-          JSON.stringify(this.reentryStats(s.orders)) +
-          "\n\nCURRENT TARGETS\n" +
-          JSON.stringify(this.currentTargets()) +
           "\n\n" +
           this.schemaText();
         try {
@@ -934,28 +925,6 @@ export class TradeReview {
     }
     const sample = closedTrades(s.orders);
     const reviewed = proposals.map((p) => {
-      // A pool edit (delete a losing template / add a new combination) is a
-      // structural change: no sample gate, but it is validated hard and only the
-      // daily pass reaches here.
-      if (p?.target === "strategyPool") {
-        const reasons = [];
-        const err = this.poolError(p.proposed);
-        if (err) reasons.push(err);
-        let applied = false;
-        if (!err && autoApply) {
-          try {
-            this.applyPool(p.proposed);
-            applied = true;
-          } catch (e) {
-            reasons.push(e.message);
-          }
-        }
-        return {
-          ...p,
-          gate: { ok: reasons.length === 0, reasons, tier: "structural" },
-          applied,
-        };
-      }
       const isRevert = p?.revert === true;
       // A revert restores a prior known value, so it is not sample-gated; it
       // only has to name an allowed target.
@@ -984,28 +953,50 @@ export class TradeReview {
         if (armOf !== focusArm)
           gate.reasons.push(`Focused review: only ${focusArm} may be changed`);
       }
-      // Weighted-model changes (4.0.0): a change to a bot's weights or score
-      // threshold must beat the current weights on a deterministic backtest over
-      // the candles held, by a margin, before it is applied.
-      if (!isRevert && backtest && p?.target?.startsWith("params.")) {
-        try {
-          const proposedParams = JSON.parse(p.proposed);
-          if (
-            Object.keys(proposedParams ?? {}).some(
-              (k) => WEIGHT_KEYS.includes(k) || k === "scoreMin",
-            )
-          ) {
-            const arm = p.target.slice("params.".length);
-            const currentParams = JSON.parse(this.currentFor(p.target));
-            const cur = backtest(arm, currentParams);
-            const next = backtest(arm, proposedParams);
-            if (!(Number(next.net) >= Number(cur.net) + 0.1))
-              gate.reasons.push(
-                `Backtest: weighted net ${next.net} vs current ${cur.net} (needs +0.1)`,
-              );
+      // Weights-only review (4.0.4): the ONLY accepted change is a weights /
+      // scoreMin patch on `params.<bot>`. Everything else is out of scope.
+      if (!isRevert) {
+        const target = p?.target ?? "";
+        if (!target.startsWith("params."))
+          gate.reasons.push(
+            `Weights-only review: only params.<bot> weights may change (got ${target || "none"})`,
+          );
+        else {
+          let obj = null,
+            cur = null;
+          try {
+            obj = JSON.parse(p.proposed);
+            cur = JSON.parse(this.currentFor(target));
+          } catch {
+            /* mergeProposal guarantees JSON */
           }
-        } catch (e) {
-          gate.reasons.push(`Backtest failed: ${e.message}`);
+          // Only the keys the model actually CHANGED are judged; the rest of the
+          // merged param object rides along unchanged.
+          const changed = obj
+            ? Object.keys(obj).filter((k) => !cur || obj[k] !== cur[k])
+            : [];
+          const bad = changed.filter(
+            (k) => !WEIGHT_KEYS.includes(k) && k !== "scoreMin",
+          );
+          if (bad.length)
+            gate.reasons.push(
+              `Weights-only review: out-of-scope keys ${bad.join(", ")}`,
+            );
+          // A weights change must beat the current weights on the backtest over
+          // the candles held, by a margin, before it is applied.
+          else if (backtest) {
+            try {
+              const arm = target.slice("params.".length);
+              const curNet = backtest(arm, cur ?? {});
+              const nextNet = backtest(arm, obj ?? {});
+              if (!(Number(nextNet.net) >= Number(curNet.net) + 0.1))
+                gate.reasons.push(
+                  `Backtest: weighted net ${nextNet.net} vs current ${curNet.net} (needs +0.1)`,
+                );
+            } catch (e) {
+              gate.reasons.push(`Backtest failed: ${e.message}`);
+            }
+          }
         }
       }
       gate.ok = gate.ok && gate.reasons.length === 0;
@@ -1071,55 +1062,6 @@ export class TradeReview {
       },
     );
     return record;
-  }
-  // Validate a `strategyPool` edit without side effects. Templates can only be
-  // recombinations of the coded rules, so every template stays executable.
-  poolError(proposed) {
-    if (!proposed || typeof proposed !== "object")
-      return "Pool change must be an object";
-    const remove = Array.isArray(proposed.remove) ? proposed.remove : [];
-    const add = Array.isArray(proposed.add) ? proposed.add : [];
-    if (!remove.length && !add.length) return "Pool change is empty";
-    const current = getTemplates();
-    for (const id of remove)
-      if (!current[id]) return `Cannot remove unknown template ${id}`;
-    const remaining = Object.keys(current).filter((id) => !remove.includes(id));
-    if (!remaining.length) return "Cannot remove every template";
-    for (const t of add) {
-      if (!t || typeof t.id !== "string" || !t.id)
-        return "New template needs an id";
-      if (!STRATEGY_RULES[t.rule]) return `Unknown rule ${t.rule}`;
-      if (!["all", "top100", "top20"].includes(t.universe))
-        return `Unknown universe ${t.universe}`;
-      if (!["5m", "15m", "1h"].includes(t.timeframe))
-        return `Unknown timeframe ${t.timeframe}`;
-    }
-    return null;
-  }
-  // Apply a validated pool edit: delete templates, add recombination templates,
-  // persist the pool in state and make it live for evaluate()/the collector.
-  applyPool(proposed) {
-    const err = this.poolError(proposed);
-    if (err) throw Error(err);
-    const current = { ...getTemplates() };
-    for (const id of proposed.remove ?? []) delete current[id];
-    for (const t of proposed.add ?? [])
-      current[t.id] = {
-        label:
-          typeof t.label === "string" && t.label ? t.label.slice(0, 80) : t.id,
-        rule: t.rule,
-        universe: t.universe,
-        timeframe: t.timeframe,
-        count: Math.min(10, Math.max(1, Number(t.count) || 3)),
-      };
-    this.store.change(
-      (st) => {
-        st.strategyPool = current;
-      },
-      "change",
-      { message: `Strategy pool updated: ${Object.keys(current).join(", ")}` },
-    );
-    setTemplates(current);
   }
   // Apply a proposal that already passed the gate. One file at a time, backed
   // up, written atomically, and recorded as an audit event.

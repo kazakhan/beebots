@@ -14,6 +14,47 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [4.0.4] - 2026-10-15 - The review tunes weights only (no rotation, no pool)
+
+The review was still the old rotation machine: its system prompt told the LLM to
+replace a bot's strategy template from the pool and edit the pool itself, and the
+prompt still sent the STRATEGY POOL and "STRATEGY DUE (replace the strategy)"
+blocks. Nothing rotated in practice (strategy changes are refused), but the pass
+was wasted and the card talked rotation instead of weights. Removed.
+
+### Changed
+
+- **The review is a weighted-model tuner.** `REVIEW_SYSTEM` now says: tune each
+  bot's **weights** (`wM7…wRank`) and `scoreMin` to raise realised P&L / cut
+  losses, and keep the arm participating ("trading LESS is not a strategy").
+  Removed: strategy template, strategy pool, `strategyPool`, ROTATE A LOSER,
+  rubric edits, Laya-question edits, runtime edits.
+- **Hard gate: weights only.** A proposal is accepted only as a `params.<bot>`
+  patch whose **changed** keys are weights or `scoreMin`; any other target or key
+  is refused ("Weights-only review"). Only the keys the model actually changed are
+  judged (the unchanged params ride along).
+- **`strategy` is now a locked parameter** (`LOCKED_PARAMS`), so it is out of the
+  tunables and refused outright.
+- **Prompt** sends a compact **WEIGHTED MODEL** block (per-bot weights + `scoreMin`)
+  and **LOSING ARMS**; the STRATEGY POOL / STRATEGY DUE / RE-ENTRY / CURRENT
+  TARGETS blocks are gone. `schemaText` lists only the weight ranges.
+- **`self-tune` is weights-only**: it nudges one weight for the bottleneck or a
+  losing arm; the template-param and analysis-variant steps are removed.
+- `effectiveParams` now includes the seed weights, so the review can see and tune
+  them.
+
+### Removed
+
+- `poolError`/`applyPool`, the `strategyPool` proposal path and state writes.
+
+### Verification
+
+- 334 Node tests pass: the weights-only gate refuses non-weight params and
+  non-params targets, the prompt has no rotation/pool text, self-tune emits only
+  weight steps.
+
+---
+
 ## [4.0.3] - 2026-10-15 - Persist audit fields; make the loop propose
 
 ### Fixed

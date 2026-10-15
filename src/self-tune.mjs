@@ -1,28 +1,21 @@
-// The no-LLM self-tuner: turn Laya's rubric answers into bounded changes.
+// The no-LLM self-tuner (4.0.4): WEIGHTS ONLY.
 //
-// A System One model cannot author text, so when no LLM is enabled this
-// deterministic table reads Laya's self-review answers and moves a whitelisted
-// set of numbers by ONE bounded step, or selects a pre-authored analysis
-// variant. Everything it emits is validated by the same override schema the LLM
-// uses, applied by the same code, and auto-reverted if it loses to Dice.
+// Trading is a weighted model, so the only thing worth tuning is the weights.
+// When no LLM is enabled this deterministic table reads Laya's self-review
+// answers and moves ONE weight by ONE bounded step for a bot that is the
+// bottleneck or is losing money. Everything it emits is validated by the same
+// override schema the LLM uses and is applied by the same code, and a weight
+// change is applied only if the review's backtest shows net P&L improves.
 import { clampParam } from "./overrides.mjs";
-import { VARIANT_NAMES } from "./analysis-variants.mjs";
 
 const BOTS = ["breakout", "trend", "momentum"];
 
-// The weighted model's tuned knob per bot: one bounded weight step per review.
+// The weight key each bot nudges (its defining feature): Keeper = 7d momentum,
+// Spark = RSI, Scout = breakout.
 const WEIGHT_NUDGE = {
   trend: "wM7",
   momentum: "wRsiLow",
   breakout: "wBreakout",
-};
-
-// Loosening direction per bot (one step): make the gates easier to pass. The
-// keys are the ones each bot's pinned template actually reads (3.8.0).
-const LOOSEN = {
-  breakout: { relativeVolume: -0.25, maxExtensionAtr: 0.25 },
-  trend: { maxExtensionAtr: 0.25, topFraction: 0.05 },
-  momentum: { rsiOversold: 5, maxExtensionAtr: 0.25 },
 };
 
 export function selfTune({
@@ -46,6 +39,12 @@ export function selfTune({
     if (!Number.isFinite(base)) return null;
     return clampParam(target, key, base + delta);
   };
+  const nudge = (arm, why) => {
+    const wk = WEIGHT_NUDGE[arm];
+    if (!wk) return;
+    const v = step(`params.${arm}`, wk, 0.5);
+    if (v !== null) merge(`params.${arm}`, { [wk]: v }, why);
+  };
 
   const bottleneck = BOTS.includes(answers?.primary_bottleneck?.choice)
     ? answers.primary_bottleneck.choice
@@ -53,71 +52,17 @@ export function selfTune({
   const quality = (b) => Number(answers?.[`${b}_quality`]?.score);
   const missed = Number(answers?.missed_opportunity?.noul) >= 0.5;
 
-  // A weak bottleneck bot, or missed opportunity, loosens its gates one step.
-  if (bottleneck && (quality(bottleneck) <= 1 || missed)) {
-    const patch = {};
-    for (const [key, delta] of Object.entries(LOOSEN[bottleneck])) {
-      const v = step(`params.${bottleneck}`, key, delta);
-      if (v !== null) patch[key] = v;
-    }
-    // One bounded weight step for the weighted model (4.0.0). The review's
-    // backtest gate accepts it only if net P&L improves.
-    const wk = WEIGHT_NUDGE[bottleneck];
-    if (wk) {
-      const v = step(`params.${bottleneck}`, wk, 0.5);
-      if (v !== null) patch[wk] = v;
-    }
-    if (Object.keys(patch).length)
-      merge(
-        `params.${bottleneck}`,
-        patch,
-        `Laya: ${bottleneck} bottleneck (quality ${quality(bottleneck)}, missed=${missed})`,
-      );
-  }
-
-  // Exit timing tunes the trail on the implicated bot, one step.
-  const exit = answers?.exit_timing?.choice;
-  if (bottleneck && (exit === "late" || exit === "early")) {
-    const v = step(
-      `params.${bottleneck}`,
-      "trailAtr",
-      exit === "late" ? 0.25 : -0.25,
+  // A weak bottleneck bot, or a missed opportunity, gets one weight step.
+  if (bottleneck && (quality(bottleneck) <= 1 || missed))
+    nudge(
+      bottleneck,
+      `Laya: ${bottleneck} bottleneck (quality ${quality(bottleneck)}, missed=${missed})`,
     );
-    if (v !== null)
-      merge(`params.${bottleneck}`, { trailAtr: v }, `Laya: exits ${exit}`);
-  }
 
-  // Any arm that is losing money gets exactly one bounded weight step (4.0.3),
-  // so the loop keeps proposing. The review's backtest gate accepts it only when
-  // it improves net P&L, so an unhelpful nudge is refused.
-  for (const arm of BOTS) {
-    if (!due?.[arm]?.due) continue;
-    const wk = WEIGHT_NUDGE[arm];
-    if (!wk) continue;
-    const v = step(`params.${arm}`, wk, 0.5);
-    if (v !== null)
-      merge(
-        `params.${arm}`,
-        { [wk]: v },
-        `Laya: ${arm} losing (one weight step)`,
-      );
-  }
-
-  // Analysis variant from Laya's self-review of its own questions.
-  let variant = null;
-  if (answers?.laya_question_coverage?.choice === "too_strict")
-    variant = "loose";
-  else if (answers?.laya_question_coverage?.choice === "too_loose")
-    variant = "strict";
-  const focus = answers?.laya_evidence_focus?.choice;
-  if (focus && VARIANT_NAMES.includes(`${focus}_focus`))
-    variant = `${focus}_focus`;
-  if (variant)
-    merge(
-      "laya.analysisPolicy",
-      { variant },
-      `Laya: analysis variant ${variant}`,
-    );
+  // Any arm flagged losing gets one weight step. The review's backtest gate
+  // accepts it only when net P&L improves, so an unhelpful nudge is refused.
+  for (const arm of BOTS)
+    if (due?.[arm]?.due) nudge(arm, `Laya: ${arm} losing (one weight step)`);
 
   return [...byTarget.entries()].map(([target, e]) => ({
     target,
