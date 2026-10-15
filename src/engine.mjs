@@ -49,7 +49,7 @@ import {
 } from "./engines.mjs";
 
 // Backend build identifier, surfaced in api/state for the version-skew check.
-const BUILD = "4.0.4";
+const BUILD = "4.0.5";
 // Signal-timeframe lengths, for measuring the re-entry lookback in bars.
 const TIME_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 // How many candidates go into the decision prompt. The analysis cap is 100, but
@@ -338,17 +338,10 @@ export class Engine {
   backtestBot(bot, rules) {
     const frames = this.market?.frames;
     if (!frames?.size) return { net: 0, trades: 0 };
-    let net = 0,
-      trades = 0,
-      n = 0;
-    for (const [, f] of frames) {
-      if (n >= 40) break;
-      n++;
-      const r = backtestWeighted({ bot, frames: f, rules });
-      net += r.net;
-      trades += r.trades;
-    }
-    return { net: Number(net.toFixed(3)), trades };
+    const frameSets = [];
+    for (const [product, f] of frames) frameSets.push({ product, frames: f });
+    const r = backtestWeighted({ bot, frameSets, rules });
+    return { net: r.net, trades: r.trades, capitalEnd: r.capitalEnd };
   }
   // Compact, bounded market + position state for a System One engine. It is
   // evidence, not full precision: the execution layer holds the exact numbers.

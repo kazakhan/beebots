@@ -698,7 +698,7 @@ test("the review fills current from the target when the model omits it", async (
   }
 });
 
-test("the LLM review keeps at most one proposal by default", async () => {
+test("the LLM review keeps at most three proposals by default", async () => {
   const dir = mkdtempSync(join(tmpdir(), "beebots-review-cap-"));
   const store = new Store(":memory:", config());
   try {
@@ -731,7 +731,7 @@ test("the LLM review keeps at most one proposal by default", async () => {
       coverage: null,
       autoApply: false,
     });
-    assert.equal(rec.proposals.length, 1, "one proposal kept by default");
+    assert.equal(rec.proposals.length, 3, "up to three proposals kept");
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -1265,6 +1265,56 @@ test("the review refuses any non-weight proposal", async () => {
     assert.ok(
       byTarget["rubric.trend"].gate.reasons.some((r) => /Weights-only/.test(r)),
       "a non-params target is refused",
+    );
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a weight change over the step, or a negative weight, is refused", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "beebots-wstep-"));
+  const store = new Store(":memory:", config());
+  try {
+    const laya = {
+      ask: async () => ({ answers: { exit_timing: { choice: "late" } } }),
+    };
+    const model = {
+      review: async () => ({
+        data: {
+          proposals: [
+            { target: "params.trend", proposed: JSON.stringify({ wM7: 9 }) },
+            {
+              target: "params.momentum",
+              proposed: JSON.stringify({ wRsiLow: -1 }),
+            },
+          ],
+        },
+      }),
+    };
+    const reviewer = new TradeReview({
+      store,
+      laya,
+      model,
+      config: { review: { maxProposals: 2 } },
+      dataDir: dir,
+      reviewLlm: () => true,
+    });
+    const rec = await reviewer.run({
+      since: 0,
+      until: 3600000,
+      coverage: null,
+      autoApply: false,
+      backtest: () => ({ net: 999, trades: 1 }),
+    });
+    const by = Object.fromEntries(rec.proposals.map((p) => [p.target, p]));
+    assert.ok(
+      by["params.trend"].gate.reasons.some((r) => /over the 1 step/.test(r)),
+      "a jump over the step is refused",
+    );
+    assert.ok(
+      by["params.momentum"].gate.reasons.some((r) => /non-negative/.test(r)),
+      "a negative weight is refused",
     );
   } finally {
     store.close();

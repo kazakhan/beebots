@@ -1,9 +1,13 @@
-// Deterministic backtest for the weighted model (4.0.0).
+// Deterministic portfolio backtest for the weighted model (4.0.5).
 //
-// Replays a bot's weighted entries over the candles already held and simulates
-// the bot's own exits, so the Trade Review can accept a weight change only if it
-// improves net P&L. It is a SIMULATION over closed bars (bid/ask approximated by
-// the bar close) and is bounded (product/eval/time caps). No orders, no models.
+// Simulates the BOT, not a single product: one shared capital, at most
+// `maxPositions` open at once, one position per product, the live entry gate
+// (score >= scoreMin, executable, exitWouldFire false), the live cooldown on
+// stop/rule exits, and the bot's own exits (percentage stop, trailing stop,
+// max-hold, and the rule exit). Net P&L is returned as a percentage of the
+// starting capital, so the numbers mean something. It is a SIMULATION over
+// closed bars (bid/ask approximated by the bar close) and is bounded. No
+// orders, no models.
 import {
   aggregate,
   atr,
@@ -20,7 +24,7 @@ import {
   exitWouldFire,
 } from "./weighted.mjs";
 
-const TAKER = 0.006; // round-trip fee assumption (each side), like the live taker tier
+const TAKER = 0.006; // fee per side, like the live taker tier
 const TF_MS = { "5m": 300000, "15m": 900000, "1h": 3600000 };
 
 function signalBars(frames, timeframe) {
@@ -29,11 +33,11 @@ function signalBars(frames, timeframe) {
   return aggregate(frames.five ?? [], 900);
 }
 
-// A bounded feature snapshot at signal bar i, mirroring what evaluate() provides.
-function featuresAt(sig, hourAll, i, bot) {
+// The feature snapshot at signal bar i, mirroring what evaluate() provides.
+function featuresAt(sig, hourAll, i) {
   const bar = sig[i];
   const closes = sig.slice(0, i + 1).map((x) => x.close);
-  const prior = sig.slice(Math.max(0, i - 24), i).map((x) => x.high);
+  const priorHigh = sig.slice(Math.max(0, i - 24), i).map((x) => x.high);
   const priorLow = sig.slice(Math.max(0, i - 24), i).map((x) => x.low);
   const hour = hourAll.filter((h) => h.time + 3600000 <= bar.time + 900000);
   const hp = hour.map((x) => x.close);
@@ -64,103 +68,148 @@ function featuresAt(sig, hourAll, i, bot) {
   f.relativeVolume = med > 0 ? hour.at(-1).volume / med : 0;
   f.rsi = rsi(closes, 14);
   f.prevRsi = rsi(closes.slice(0, -1), 14);
-  if (prior.length) {
-    f.channelHigh = Math.max(...prior);
+  if (priorHigh.length) {
+    f.channelHigh = Math.max(...priorHigh);
     f.channelLow = Math.min(...priorLow);
   }
   f.stopPrice = f.atr > 0 ? bar.close - 2 * f.atr : bar.close;
   f.maxEntry = bar.close + 0.5 * f.atr;
-  f._closes = closes;
   return f;
-}
-
-// The exit that fires next for a position opened at `entry` on signal bar `i`.
-function exitAt(sig, hourAll, i, entry, rules, bot) {
-  const rule = resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
-  const stop = entry * (1 - (Number(rules.stopPct) || 3) / 100);
-  const trailAct = Number(rules.trailActivationPct) || 4;
-  const trailPct = Number(rules.trailPct) || 3;
-  const maxHoldBars =
-    Number(rules.maxHoldHours) > 0
-      ? Math.round(
-          (Number(rules.maxHoldHours) * 3600000) / TF_MS[rules.timeframe],
-        )
-      : Infinity;
-  let peak = entry;
-  const end = Math.min(
-    sig.length - 1,
-    i + (Number.isFinite(maxHoldBars) ? maxHoldBars : 200),
-  );
-  for (let j = i + 1; j <= end; j++) {
-    const bar = sig[j];
-    peak = Math.max(peak, bar.high);
-    if (bar.low <= stop) return { exit: stop, reason: "stop", j };
-    if (
-      peak >= entry * (1 + trailAct / 100) &&
-      bar.low <= peak * (1 - trailPct / 100)
-    )
-      return { exit: peak * (1 - trailPct / 100), reason: "trail", j };
-    // Rule exit (Keeper fade / Spark RSI-neutral).
-    const f = featuresAt(sig, hourAll, j, bot);
-    if (exitWouldFire(rule, f, rules))
-      return { exit: bar.close, reason: "rule", j };
-    if (j >= i + maxHoldBars) return { exit: bar.close, reason: "max-hold", j };
-  }
-  return { exit: sig[end].close, reason: "end", j: end };
 }
 
 export function backtestWeighted({
   bot,
-  frames,
+  frameSets = [],
   rules = {},
-  bars = 200,
-  maxTrades = 25,
+  initialCapital = 100,
+  maxProducts = 60,
+  maxBars = 200,
 } = {}) {
   const timeframe = rules.timeframe ?? "15m";
-  const sig = signalBars(frames, timeframe);
-  const hourAll = frames.hour ?? [];
+  const rule = resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
   const weights = weightsFor(bot, rules);
   const min = scoreMinFor(bot, rules);
-  const rule = resolveTemplate(rules.strategy)?.rule ?? rules.strategy;
+  const maxPos = Number(rules.maxPositions) || 3;
+  const stopPct = Number(rules.stopPct) || 3;
+  const trailAct = Number(rules.trailActivationPct) || 4;
+  const trailPct = Number(rules.trailPct) || 3;
+  const riskPct = Number(rules.riskPct) || 0.5;
+  const tradeFrac = Number(rules.tradeFraction) || 0.9;
+  const maxHoldMs =
+    Number(rules.maxHoldHours) > 0 ? Number(rules.maxHoldHours) * 3600000 : 0;
   const cooldownMs = (Number(rules.exitCooldownHours) || 1) * 3600000;
-  const warmup = Math.max(20, 15);
-  const start = Math.max(warmup, sig.length - bars);
-  let net = 0,
-    gross = 0,
-    fees = 0,
+
+  // Build each product's signal series and flatten the events on a shared clock.
+  const series = [];
+  for (const fs of frameSets.slice(0, maxProducts)) {
+    const sig = signalBars(fs.frames ?? fs, timeframe);
+    if (sig.length < 40) continue;
+    series.push({
+      product: fs.product ?? "?",
+      sig,
+      hourAll: (fs.frames ?? fs).hour ?? [],
+      start: Math.max(30, sig.length - maxBars),
+    });
+  }
+  const events = [];
+  for (const s of series)
+    for (let i = s.start; i < s.sig.length - 1; i++)
+      events.push({ s, i, t: s.sig[i].time });
+  events.sort((a, b) => a.t - b.t);
+
+  let cash = initialCapital,
     trades = 0,
     wins = 0,
-    losses = 0,
-    cooldownUntil = 0;
-  for (let i = start; i < sig.length - 1 && trades < maxTrades; i++) {
-    if (sig[i].time < cooldownUntil) continue;
-    const f = featuresAt(sig, hourAll, i, bot);
-    if (!executable(f, rules)) continue;
-    if (scoreCandidate(f, weights) < min) continue;
-    // Never enter a position the rule exit would close immediately (4.0.2).
-    if (exitWouldFire(rule, f, rules)) continue;
-    const entry = sig[i].close;
-    const { exit, reason, j } = exitAt(sig, hourAll, i, entry, rules, bot);
-    // A stop or a rule exit puts the product in a cooldown mirroring the live
-    // engine, so the backtest cannot reward churn (4.0.2).
-    if (reason === "stop" || reason === "rule")
-      cooldownUntil = sig[j].time + cooldownMs;
-    const g = (exit / entry - 1) * 100;
-    const fee = TAKER * 200;
-    net += g - fee;
-    gross += g;
-    fees += fee;
+    losses = 0;
+  const positions = new Map(); // product -> { qty, entry, stop, peak, openedT }
+  const cooldown = new Map();
+
+  const close = (product, price, openedT) => {
+    const pos = positions.get(product);
+    positions.delete(product);
+    const proceeds = pos.qty * price;
+    cash += proceeds - proceeds * TAKER;
+    const pnl =
+      proceeds - pos.qty * pos.entry - proceeds * TAKER - pos.entryFee;
     trades++;
-    if (g - fee > 0) wins++;
+    if (pnl > 0) wins++;
     else losses++;
+    return openedT;
+  };
+
+  for (const { s, i, t } of events) {
+    const bar = s.sig[i];
+    const pos = positions.get(s.product);
+    if (pos) {
+      pos.peak = Math.max(pos.peak, bar.high);
+      let exit = null,
+        reason = null;
+      if (bar.low <= pos.stop) {
+        exit = pos.stop;
+        reason = "stop";
+      } else if (
+        pos.peak >= pos.entry * (1 + trailAct / 100) &&
+        bar.low <= pos.peak * (1 - trailPct / 100)
+      ) {
+        exit = pos.peak * (1 - trailPct / 100);
+        reason = "trail";
+      } else {
+        const f = featuresAt(s.sig, s.hourAll, i);
+        if (exitWouldFire(rule, f, rules)) {
+          exit = bar.close;
+          reason = "rule";
+        } else if (maxHoldMs && t - pos.openedT >= maxHoldMs) {
+          exit = bar.close;
+          reason = "max-hold";
+        }
+      }
+      if (exit != null) {
+        close(s.product, exit, pos.openedT);
+        if (reason === "stop" || reason === "rule")
+          cooldown.set(s.product, t + cooldownMs);
+      }
+      continue;
+    }
+    if (positions.size >= maxPos) continue;
+    const until = cooldown.get(s.product);
+    if (until && t < until) continue;
+    const f = featuresAt(s.sig, s.hourAll, i);
+    if (!executable(f, rules)) continue;
+    if (exitWouldFire(rule, f, rules)) continue;
+    if (scoreCandidate(f, weights) < min) continue;
+    const price = bar.close;
+    if (!(price > 0)) continue;
+    // Risk-based notional, capped so several positions fit (like the live book).
+    const notional = Math.min(
+      cash * tradeFrac,
+      (cash * (riskPct / 100)) / (stopPct / 100),
+    );
+    const entryFee = notional * TAKER;
+    if (notional + entryFee > cash || notional <= 0) continue;
+    const qty = notional / price;
+    cash -= notional + entryFee;
+    positions.set(s.product, {
+      qty,
+      entry: price,
+      entryFee,
+      stop: price * (1 - stopPct / 100),
+      peak: price,
+      openedT: t,
+    });
   }
+  // Mark open positions to their last close.
+  for (const [product, pos] of positions) {
+    const s = series.find((x) => x.product === product);
+    const price = s?.sig?.at(-1)?.close ?? pos.entry;
+    close(product, price, pos.openedT);
+  }
+
   return {
     bot,
     trades,
     wins,
     losses,
-    gross: Number(gross.toFixed(3)),
-    fees: Number(fees.toFixed(3)),
-    net: Number(net.toFixed(3)),
+    capitalEnd: Number(cash.toFixed(3)),
+    net: Number(((cash / initialCapital - 1) * 100).toFixed(3)),
   };
 }

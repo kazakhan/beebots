@@ -118,12 +118,27 @@ function risingFrames() {
   return { five, hour, four: [] };
 }
 
-test("backtestWeighted is deterministic and bounded", () => {
-  const frames = risingFrames();
-  const a = backtestWeighted({ bot: "trend", frames, rules: {} });
-  const b = backtestWeighted({ bot: "trend", frames, rules: {} });
-  assert.deepEqual(a, b);
-  assert.ok(a.trades <= 25);
+test("backtestWeighted is a bounded portfolio sim and deterministic", () => {
+  const rules = {
+    strategy: "orakelia",
+    timeframe: "15m",
+    stopPct: 3,
+    trailActivationPct: 6,
+    trailPct: 4,
+    maxHoldHours: 24,
+    riskPct: 0.5,
+    tradeFraction: 0.9,
+    maxPositions: 3,
+  };
+  const frameSets = [
+    { product: "A-USDC", frames: risingFrames() },
+    { product: "B-USDC", frames: risingFrames() },
+  ];
+  const a = backtestWeighted({ bot: "trend", frameSets, rules });
+  const b = backtestWeighted({ bot: "trend", frameSets, rules });
+  assert.deepEqual(a, b, "deterministic");
+  assert.ok(Number.isFinite(a.net));
+  assert.ok(a.trades <= 2 * 200, "bounded");
 });
 
 test("exitWouldFire matches the code exit for each rule", () => {

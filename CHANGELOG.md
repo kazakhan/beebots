@@ -14,6 +14,35 @@ contract, MINOR adds user-visible behaviour, PATCH is internal or a fix.
 
 ---
 
+## [4.0.5] - 2026-10-15 - Realistic backtest, more proposals, sane weights
+
+The review ran, proposed a weights-only change (good), and the backtest refused it
+("net 389 vs current 1927") - because the backtest summed per-trade percent across
+up to 40 products with no capital or position constraint, so its scale was
+meaningless. Fixed, and made the LLM's proposals sane.
+
+### Changed
+
+- **The backtest is now a portfolio simulation** (`src/backtest.mjs`): one shared
+  capital ($100), at most `maxPositions` open at once, one position per product,
+  the live entry gate (score >= `scoreMin`, executable, and the rule exit must not
+  fire), the live cooldown on stop/rule exits, risk-based sizing, and the bot's
+  own exits (percentage stop, trailing, max-hold, rule exit). Net is returned as a
+  **percentage of the starting capital**, so the gate's numbers are comparable.
+- **Up to three proposals per review** (`review.maxProposals` default 1 -> 3), so
+  every losing arm can be tuned.
+- **Sane weights**: a weight change is refused if a weight goes **negative** (no
+  sign inversion) or moves more than `review.maxWeightStep` (default 1) in one
+  review. `scoreMin` is bounded the same way.
+
+### Verification
+
+- 335 Node tests pass: the portfolio backtest is deterministic and bounded, the
+  step bound and non-negative rule refuse bad weights, and three proposals are
+  kept by default.
+
+---
+
 ## [4.0.4] - 2026-10-15 - The review tunes weights only (no rotation, no pool)
 
 The review was still the old rotation machine: its system prompt told the LLM to

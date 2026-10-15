@@ -876,7 +876,9 @@ export class TradeReview {
             ? r.data.proposals
                 .slice(
                   0,
-                  Math.max(1, Number(this.config?.review?.maxProposals) || 1),
+                  // Up to three weight proposals per review (one per bot by
+                  // default) so every losing arm can be tuned (4.0.5).
+                  Math.max(1, Number(this.config?.review?.maxProposals) || 3),
                 )
                 .map((p) => {
                   const m = this.mergeProposal(p);
@@ -982,9 +984,27 @@ export class TradeReview {
             gate.reasons.push(
               `Weights-only review: out-of-scope keys ${bad.join(", ")}`,
             );
+          // Sane weights (4.0.5): non-negative (no sign inversions) and no jump
+          // larger than `review.maxWeightStep` (default 1) per review.
+          const step = Number(this.config?.review?.maxWeightStep) || 1;
+          for (const k of changed) {
+            if (!WEIGHT_KEYS.includes(k) && k !== "scoreMin") continue;
+            const nv = Number(obj[k]),
+              cv = Number(cur?.[k]);
+            if (!Number.isFinite(nv))
+              gate.reasons.push(`Weights-only review: ${k} must be a number`);
+            else if (WEIGHT_KEYS.includes(k) && nv < 0)
+              gate.reasons.push(
+                `Weights-only review: ${k} must be non-negative`,
+              );
+            else if (Number.isFinite(cv) && Math.abs(nv - cv) > step)
+              gate.reasons.push(
+                `Weights-only review: ${k} moves ${(nv - cv).toFixed(2)}, over the ${step} step`,
+              );
+          }
           // A weights change must beat the current weights on the backtest over
           // the candles held, by a margin, before it is applied.
-          else if (backtest) {
+          if (!bad.length && backtest) {
             try {
               const arm = target.slice("params.".length);
               const curNet = backtest(arm, cur ?? {});
